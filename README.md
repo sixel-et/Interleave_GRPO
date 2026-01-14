@@ -4,15 +4,20 @@
 
 ## Infrastructure
 
+## Questions
+1. Is broader system behavior evaluated at different steps in the training process? Above and beyond the per step rewards?
+1. What does WandB integration require?
+1. What kind of logging is possible?
+1. This is for a network volume. What's the simplest thing we can do to enable that? Local volume is not persistent.
+1. What is our dataset?
+1. Does the Instruct model really require "system" and "user" prompts? Are we providing that?
 
 ## Todo
 1. We learned something about learning rate. implement it
-1. What does WandB integration require
-1. What kind of logging is possible?
-1. This is for a network volume. What's the simplest thing we can do to enable that? Local volume is not persistent.
+
 1. Llama 3.x 3B Instruct
 1. We need to swap out Will's data set for our own.
-1. What is our dataset?
+
 1. We need to quantify the behavior before training starts.
 1. We need to make sure that the training and quantification are targeting the same thing. 
 
