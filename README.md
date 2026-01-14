@@ -8,13 +8,51 @@
 1. Main training file that performs GRPO
 1. Dataset generation script
 1. 
-1. Startup file that gets a network volume instance on runpod configured properly   
+1. Startup file that configures a runpod using a network volume as its only persistent store.   
 1. Json file containing upto the first 500 words of 100 different texts.
 1. main training file that performs GRPO
 1. Fi
 
 ## Coding guidelines
 1. user configurable values should be in a config section at the tope of the file.
+1. All functions should have tests, that include both positive and negative controls.
+1. tests should be based on "cases" so that edge cases can be evaluated. Something like "defined input, expected output".
+
+## Testing
+Layer 1: Unit tests - Do the individual functions produce correct output for known inputs? (reward.py --test) with
+Layer 2: Integration tests - Do the components work together? (dataset → reward function)
+Layer 3: Smoke test - Does the whole pipeline run without crashing? (load model, 1 training step)
+Layer 4: Baseline eval - Does it actually do the thing? (measure performance before/after)
+### Unit Tests
+```bash
+python reward.py --test          # NW alignment, parsing
+python dataset_generator.py --preview 5  # Sample generation
+```
+
+### Integration Test
+```bash
+python -c "
+from dataset_generator import generate_dataset
+from reward import interleave_reward_func
+
+ds = generate_dataset(num_samples=10, num_words=5)
+# Fake perfect completions
+completions = [[{'content': s}] for s in ds['expected_str']]
+rewards = interleave_reward_func(completions, ds['expected'])
+assert all(r == 1.0 for r in rewards), 'Perfect completions should score 1.0'
+print('Integration test passed')
+"
+```
+
+### Smoke Test (on RunPod)
+```bash
+python interleave_grpo.py --test  # Loads model, runs 1 step, exits
+```
+
+### Baseline Eval
+```bash
+python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
+```
 
 ## Questions
 1. Is broader system behavior evaluated at different steps in the training process? Above and beyond the per step rewards?
