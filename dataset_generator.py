@@ -18,7 +18,11 @@ from datasets import Dataset
 SOURCE_TEXTS_PATH = "source_texts.json"
 
 # Dataset size
-NUM_SAMPLES = 1000
+NUM_SAMPLES = 5000
+
+# Train/val/test split ratios
+VAL_SPLIT = 0.1   # 10% for validation during training
+TEST_SPLIT = 0.1  # 10% held out for evaluate.py
 
 # Fragment length (difficulty dial - start small, increase as model improves)
 NUM_WORDS = 10
@@ -178,19 +182,22 @@ def generate_dataset(
     num_samples: int = NUM_SAMPLES,
     num_words: int = NUM_WORDS,
     seed: int = SEED,
-) -> Dataset:
+    val_split: float = VAL_SPLIT,
+    test_split: float = TEST_SPLIT,
+) -> tuple[Dataset, Dataset, Dataset]:
     """
-    Generate a HuggingFace Dataset for training.
+    Generate HuggingFace Datasets for training, validation, and testing.
     
     Args:
         texts_path: path to source_texts.json
-        num_samples: number of training samples to generate
+        num_samples: total number of samples to generate
         num_words: words per fragment (controls difficulty)
         seed: random seed for reproducibility
+        val_split: fraction for validation (used during training)
+        test_split: fraction for test (held out for evaluate.py)
     
     Returns:
-        HuggingFace Dataset with columns:
-            - prompt, fragment_a, fragment_b, expected, expected_str, text_a_id, text_b_id
+        (train_dataset, val_dataset, test_dataset)
     """
     random.seed(seed)
     texts = load_texts(texts_path)
@@ -208,7 +215,20 @@ def generate_dataset(
         "text_b_id": [s["text_b_id"] for s in samples],
     }
     
-    return Dataset.from_dict(dataset_dict)
+    full_dataset = Dataset.from_dict(dataset_dict)
+    
+    # Split: first separate test, then split remainder into train/val
+    temp_test = full_dataset.train_test_split(test_size=test_split, seed=seed)
+    test_dataset = temp_test["test"]
+    
+    train_val = temp_test["train"].train_test_split(
+        test_size=val_split / (1 - test_split), 
+        seed=seed
+    )
+    train_dataset = train_val["train"]
+    val_dataset = train_val["test"]
+    
+    return train_dataset, val_dataset, test_dataset
 
 
 # ============================================================================
@@ -220,38 +240,49 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Generate interleaving dataset")
     parser.add_argument("--texts", default=SOURCE_TEXTS_PATH, help="Path to source texts JSON")
-    parser.add_argument("--num-samples", type=int, default=NUM_SAMPLES, help="Number of samples")
+    parser.add_argument("--num-samples", type=int, default=NUM_SAMPLES, help="Total number of samples")
     parser.add_argument("--num-words", type=int, default=NUM_WORDS, help="Words per fragment")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed")
-    parser.add_argument("--output", default=None, help="Output path (optional, saves to disk)")
+    parser.add_argument("--val-split", type=float, default=VAL_SPLIT, help="Validation split ratio")
+    parser.add_argument("--test-split", type=float, default=TEST_SPLIT, help="Test split ratio")
+    parser.add_argument("--output", default=None, help="Output directory (optional, saves to disk)")
     parser.add_argument("--preview", type=int, default=2, help="Number of samples to preview")
     
     args = parser.parse_args()
     
     print(f"Generating {args.num_samples} samples with {args.num_words} words per fragment...")
+    print(f"Splits: train={1-args.val_split-args.test_split:.0%}, val={args.val_split:.0%}, test={args.test_split:.0%}")
     print(f"Output format: {OUTPUT_FORMAT}")
     print()
     
-    dataset = generate_dataset(
+    train, val, test = generate_dataset(
         texts_path=args.texts,
         num_samples=args.num_samples,
         num_words=args.num_words,
         seed=args.seed,
+        val_split=args.val_split,
+        test_split=args.test_split,
     )
     
-    print(f"Generated {len(dataset)} samples")
+    print(f"Generated: train={len(train)}, val={len(val)}, test={len(test)}")
     print()
     
-    # Preview
-    for i in range(min(args.preview, len(dataset))):
-        sample = dataset[i]
-        print(f"=== Sample {i+1} ===")
-        print(f"Text A ({sample['text_a_id']}): {sample['fragment_a']}")
-        print(f"Text B ({sample['text_b_id']}): {sample['fragment_b']}")
-        print(f"Expected:\n{sample['expected_str']}")
+    # Preview from train set
+    print("=== Train samples ===")
+    for i in range(min(args.preview, len(train))):
+        sample = train[i]
+        print(f"Sample {i+1}:")
+        print(f"  Text A ({sample['text_a_id']}): {sample['fragment_a']}")
+        print(f"  Text B ({sample['text_b_id']}): {sample['fragment_b']}")
+        print(f"  Expected: {' '.join(sample['expected'][:6])}...")
         print()
     
     # Save if requested
     if args.output:
-        dataset.save_to_disk(args.output)
-        print(f"Saved to {args.output}")
+        from pathlib import Path
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        train.save_to_disk(output_dir / "train")
+        val.save_to_disk(output_dir / "val")
+        test.save_to_disk(output_dir / "test")
+        print(f"Saved to {args.output}/{{train,val,test}}")
