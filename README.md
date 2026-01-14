@@ -1,6 +1,7 @@
 # Interleave_GRPO
 
-## Overview
+## Overview/Flow
+1.
 
 ## Infrastructure
 
@@ -11,6 +12,13 @@
 1. This is for a network volume. What's the simplest thing we can do to enable that? Local volume is not persistent.
 1. What is our dataset?
 1. Does the Instruct model really require "system" and "user" prompts? Are we providing that?
+1. Does the dataset need to be created in advance? or on the fly
+1. how big does it need to be?
+1. How do we construct the training data? the reference against which the response is compared?
+1. Do we need multi-dimensional/faceted rewards? It feels like ours has them all wrapped into one.
+1. How do we measure performance during training? I know we had Needleman Wunsch, but is that a separate file so that the evaluation can be done as well?
+1. How can we keep this radically simple?
+
 
 ## Todo
 1. We learned something about learning rate. implement it
