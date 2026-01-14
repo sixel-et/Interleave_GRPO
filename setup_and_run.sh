@@ -59,8 +59,9 @@ else
     SKIP_INSTALL=0
 fi
 
-echo 'source /workspace/venv/bin/activate' >> ~/.bashrc
-echo "export HF_TOKEN=\"$HF_TOKEN\"" >> ~/.bashrc
+# Add to bashrc for future sessions
+grep -q "source /workspace/venv/bin/activate" ~/.bashrc || echo 'source /workspace/venv/bin/activate' >> ~/.bashrc
+grep -q "export HF_HOME=" ~/.bashrc || echo 'export HF_HOME="/workspace/.cache/huggingface"' >> ~/.bashrc
 
 # ============================================================================
 # INSTALL DEPENDENCIES
@@ -70,13 +71,13 @@ if [ "$SKIP_INSTALL" != "1" ]; then
     echo ""
     echo ">>> Installing dependencies..."
     pip install --upgrade pip -q
-    pip install torch transformers accelerate trl datasets huggingface-hub bitsandbytes -q
+    pip install torch transformers accelerate trl datasets huggingface-hub bitsandbytes wandb -q
     echo "✓ Dependencies installed"
 fi
 
 echo ""
 echo ">>> Versions:"
-pip show trl transformers | grep -E "^(Name|Version)"
+pip show trl transformers wandb | grep -E "^(Name|Version)"
 
 # ============================================================================
 # VERIFY GPU
@@ -113,8 +114,38 @@ if [[ -n "$HF_TOKEN" ]]; then
 elif huggingface-cli whoami &>/dev/null; then
     echo "✓ Already logged in"
 else
-    echo "Not logged in. Run: huggingface-cli login"
+    echo "⚠ Not logged in. Run: huggingface-cli login"
 fi
+
+# ============================================================================
+# WANDB AUTH
+# ============================================================================
+
+echo ""
+echo ">>> WandB auth..."
+
+if [[ -z "$WANDB_API_KEY" ]] && [[ -f "$WORKSPACE/.wandb_api_key" ]]; then
+    export WANDB_API_KEY=$(cat "$WORKSPACE/.wandb_api_key")
+    echo "  Loaded from network volume"
+fi
+
+if [[ -n "$WANDB_API_KEY" ]]; then
+    echo "✓ WANDB_API_KEY set"
+    # Save to network volume for persistence
+    echo -n "$WANDB_API_KEY" > "$WORKSPACE/.wandb_api_key"
+elif wandb status 2>/dev/null | grep -q "Logged in"; then
+    echo "✓ Already logged in"
+    # Save key to network volume if logged in
+    if [[ -f ~/.netrc ]] && [[ ! -f "$WORKSPACE/.wandb_api_key" ]]; then
+        grep -A2 "api.wandb.ai" ~/.netrc | grep password | awk '{print $2}' > "$WORKSPACE/.wandb_api_key" 2>/dev/null || true
+    fi
+else
+    echo "⚠ Not logged in. Run: wandb login"
+    echo "  Or: echo 'YOUR_KEY' > /workspace/.wandb_api_key"
+fi
+
+# Add wandb key export to bashrc
+grep -q "WANDB_API_KEY" ~/.bashrc || echo '[ -f "/workspace/.wandb_api_key" ] && export WANDB_API_KEY=$(cat /workspace/.wandb_api_key)' >> ~/.bashrc
 
 # ============================================================================
 # DONE
@@ -128,4 +159,8 @@ echo ""
 echo "To train:"
 echo "  cd $WORKSPACE/$REPO_NAME"
 echo "  python interleave_grpo.py"
+echo ""
+echo "First time auth (if needed):"
+echo "  huggingface-cli login"
+echo "  wandb login"
 echo ""
