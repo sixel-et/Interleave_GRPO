@@ -18,7 +18,7 @@
 1. All functions should have tests, that include both positive and negative controls.
 1. tests should be based on "cases" so that edge cases can be evaluated. Something like "defined input, expected output".
 
-## Testing
+### Testing
 Layer 1: Unit tests - Do the individual functions produce correct output for known inputs? (reward.py --test) with
 Layer 2: Integration tests - Do the components work together? (dataset → reward function)
 Layer 3: Smoke test - Does the whole pipeline run without crashing? (load model, 1 training step)
@@ -61,8 +61,11 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 1. This is for a network volume. What's the simplest thing we can do to enable that? Local volume is not persistent.
 1. What is our dataset?
 1. Does the Instruct model really require "system" and "user" prompts? Are we providing that?
+  - yes
 1. Does the dataset need to be created in advance? or on the fly
+  - We're creating static because it easier
 1. how big does it need to be?
+  - Claude's code was initially 1k. I'm thinking 10k is better
 1. How do we construct the training data? the reference against which the response is compared?
 1. Do we need multi-dimensional/faceted rewards? It feels like ours has them all wrapped into one.
 1. How do we measure performance during training? I know we had Needleman Wunsch, but is that a separate file so that the evaluation can be done as well?
@@ -75,7 +78,7 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 
 ## Todo
 1. We learned something about learning rate. implement it
-1. 
+1. Setup wandb account
 1. Llama 3.x 3B Instruct
 1. We need to swap out Will's data set for our own.
 
