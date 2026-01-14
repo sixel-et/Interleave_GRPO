@@ -1,5 +1,10 @@
 # Interleave_GRPO
 
+## Overview
+
+## Infrastructure
+
+
 ## Todo
 1. We learned something about learning rate. implement it
 1. What does WandB integration require
@@ -11,7 +16,9 @@
 1. We need to quantify the behavior before training starts.
 1. We need to make sure that the training and quantification are targeting the same thing. 
 
-# Prompt Templates
+## Prompt Templates
+
+### Worlds Template
 You are two independent worlds.
 They do not share memory, state, or context.
 They exist in complete isolation except for the fact that you will output one word from each in alternation.
