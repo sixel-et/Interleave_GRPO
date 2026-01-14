@@ -1,19 +1,3 @@
-
-Skip to content
-Search Gists
-All gists
-Back to GitHub
-@willccbb
-willccbb/grpo_demo.py
-Last active 4 days ago • Report abuse
-
-Code
-Revisions 14
-Stars 1,329
-Forks 394
-Clone this repository at &lt;script src=&quot;https://gist.github.com/willccbb/4676755236bb08cab5f4e54a0475d6fb.js&quot;&gt;&lt;/script&gt;
-GRPO Llama-1B
-grpo_demo.py
 # train_grpo.py
 #
 # See https://github.com/willccbb/verifiers for ongoing developments
