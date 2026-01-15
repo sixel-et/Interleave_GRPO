@@ -1,178 +1,139 @@
-# train_grpo.py
-#
-# See https://github.com/willccbb/verifiers for ongoing developments
-#
-
 """
-Based on 
-willccbb/grpo_demo.py
+interleave_grpo.py
 
-citation:
-@misc{brown2025grpodemo,
-  title={Granular Format Rewards for Eliciting Mathematical Reasoning Capabilities in Small Language Models},
-  author={Brown, William},
-  howpublished={\url{https://gist.github.com/willccbb/4676755236bb08cab5f4e54a0475d6fb}},
-  date = {2025-01-25},
-  note = {GitHub Gist}
-}
+GRPO training for the interleaving task.
+Based on Will Brown's GSM8K demo.
+
+Usage:
+    python interleave_grpo.py
 """
 
-import re
 import torch
-from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from trl import GRPOConfig, GRPOTrainer
 
-# Load and prep dataset
+from dataset_generator import generate_dataset
+from reward import interleave_reward_func
 
-SYSTEM_PROMPT = """
-Respond in the following format:
-<reasoning>
-...
-</reasoning>
-<answer>
-...
-</answer>
-"""
+# ============================================================================
+# CONFIG - CHANGE THESE
+# ============================================================================
 
-XML_COT_FORMAT = """\
-<reasoning>
-{reasoning}
-</reasoning>
-<answer>
-{answer}
-</answer>
-"""
+MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"
 
-def extract_xml_answer(text: str) -> str:
-    answer = text.split("<answer>")[-1]
-    answer = answer.split("</answer>")[0]
-    return answer.strip()
+OUTPUT_DIR = "outputs/Llama-3B-interleave"
+RUN_NAME = "Llama-3B-interleave-grpo"
 
-def extract_hash_answer(text: str) -> str | None:
-    if "####" not in text:
-        return None
-    return text.split("####")[1].strip().replace(",", "").replace("$", "")
+# Training hyperparameters
+LEARNING_RATE = 5e-6
+NUM_TRAIN_EPOCHS = 1
+PER_DEVICE_TRAIN_BATCH_SIZE = 1
 
-# uncomment middle messages for 1-shot prompting
-def get_gsm8k_questions(split = "train") -> Dataset:
-    data = load_dataset('openai/gsm8k', 'main')[split] # type: ignore
-    data = data.map(lambda x: { # type: ignore
-        'prompt': [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            #{'role': 'user', 'content': 'What is the largest single-digit prime number?'},
-            #{'role': 'assistant', 'content': XML_COT_FORMAT.format(
-            #    reasoning="9 is divisble by 3 and 8 is divisible by 2, but 7 is prime.",
-            #    answer="7"
-            #)},
-            {'role': 'user', 'content': x['question']}
-        ],
-        'answer': extract_hash_answer(x['answer'])
-    }) # type: ignore
-    return data # type: ignore
+# IMPORTANT: generation_batch_size = batch * grad_accum * num_gpus
+# must be divisible by num_generations
+# With 1 GPU: 1 * 16 * 1 = 16, divisible by 16 ✓
+GRADIENT_ACCUMULATION_STEPS = 16
+NUM_GENERATIONS = 16  # Higher = better GRPO gradient estimates
 
-dataset = get_gsm8k_questions()
+# Generation
+MAX_PROMPT_LENGTH = 512
+MAX_COMPLETION_LENGTH = 256  # our outputs are ~20 words but leave room
 
-# Reward functions
-def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
-    responses = [completion[0]['content'] for completion in completions]
-    q = prompts[0][-1]['content']
-    extracted_responses = [extract_xml_answer(r) for r in responses]
-    print('-'*20, f"Question:\n{q}", f"\nAnswer:\n{answer[0]}", f"\nResponse:\n{responses[0]}", f"\nExtracted:\n{extracted_responses[0]}")
-    return [2.0 if r == a else 0.0 for r, a in zip(extracted_responses, answer)]
+# Logging and saving
+LOGGING_STEPS = 10
+SAVE_STEPS = 50
+EVAL_STEPS = 50
 
-def int_reward_func(completions, **kwargs) -> list[float]:
-    responses = [completion[0]['content'] for completion in completions]
-    extracted_responses = [extract_xml_answer(r) for r in responses]
-    return [0.5 if r.isdigit() else 0.0 for r in extracted_responses]
+# ============================================================================
+# TRAINING
+# ============================================================================
 
-def strict_format_reward_func(completions, **kwargs) -> list[float]:
-    """Reward function that checks if the completion has a specific format."""
-    pattern = r"^<reasoning>\n.*?\n</reasoning>\n<answer>\n.*?\n</answer>\n$"
-    responses = [completion[0]["content"] for completion in completions]
-    matches = [re.match(pattern, r, flags=re.DOTALL) for r in responses] 
-    return [0.5 if match else 0.0 for match in matches]
-
-def soft_format_reward_func(completions, **kwargs) -> list[float]:
-    """Reward function that checks if the completion has a specific format."""
-    pattern = r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>"
-    responses = [completion[0]["content"] for completion in completions]
-    matches = [re.match(pattern, r, flags=re.DOTALL) for r in responses] 
-    return [0.5 if match else 0.0 for match in matches]
-
-def count_xml(text) -> float:
-    count = 0.0
-    if text.count("<reasoning>\n") == 1:
-        count += 0.125
-    if text.count("\n</reasoning>\n") == 1:
-        count += 0.125
-    if text.count("\n<answer>\n") == 1:
-        count += 0.125
-        count -= len(text.split("\n</answer>\n")[-1])*0.001
-    if text.count("\n</answer>") == 1:
-        count += 0.125
-        count -= (len(text.split("\n</answer>")[-1]) - 1)*0.001
-    return count
-
-def xmlcount_reward_func(completions, **kwargs) -> list[float]:
-    contents = [completion[0]["content"] for completion in completions]
-    return [count_xml(c) for c in contents]
-
-#model_name = "meta-llama/Llama-3.2-1B-Instruct"
-model_name = "Qwen/Qwen2.5-1.5B-Instruct"
-
-if "Llama" in model_name:
-    output_dir = "outputs/Llama-1B-GRPO"
-    run_name = "Llama-1B-GRPO-gsm8k"
-else:
-    output_dir="outputs/Qwen-1.5B-GRPO"
-    run_name="Qwen-1.5B-GRPO-gsm8k"
+def main():
+    print("=" * 50)
+    print("Interleave GRPO Training")
+    print("=" * 50)
     
-training_args = GRPOConfig(
-    output_dir=output_dir,
-    run_name=run_name,
-    learning_rate=5e-6,
-    adam_beta1 = 0.9,
-    adam_beta2 = 0.99,
-    weight_decay = 0.1,
-    warmup_ratio = 0.1,
-    lr_scheduler_type='cosine',
-    logging_steps=1,
-    bf16=True,
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=4,
-    num_generations=16,
-    max_prompt_length=256,
-    max_completion_length=786,
-    num_train_epochs=1,
-    save_steps=100,
-    max_grad_norm=0.1,
-    report_to="wandb",
-    log_on_each_node=False,
-)
-
-model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    torch_dtype=torch.bfloat16,
-    attn_implementation="flash_attention_2",
-    device_map=None
-).to("cuda")
+    # Load dataset
+    print("\n>>> Loading dataset...")
+    train_dataset, val_dataset, test_dataset = generate_dataset()
+    print(f"    Train: {len(train_dataset)}")
+    print(f"    Val: {len(val_dataset)}")
+    print(f"    Test: {len(test_dataset)} (held out)")
+    
+    # Load model and tokenizer
+    print(f"\n>>> Loading model: {MODEL_NAME}")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer.pad_token = tokenizer.eos_token
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        torch_dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2",
+        device_map=None,
+    ).to("cuda")
+    
+    print(f"    Parameters: {model.num_parameters():,}")
+    
+    # Configure training
+    print("\n>>> Configuring GRPO...")
+    training_args = GRPOConfig(
+        output_dir=OUTPUT_DIR,
+        run_name=RUN_NAME,
         
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-tokenizer.pad_token = tokenizer.eos_token
+        # Optimizer - constant LR, let Adam adapt
+        learning_rate=LEARNING_RATE,
+        lr_scheduler_type='constant',
+        max_grad_norm=1.0,
+        
+        # Batch sizes
+        per_device_train_batch_size=PER_DEVICE_TRAIN_BATCH_SIZE,
+        per_device_eval_batch_size=PER_DEVICE_TRAIN_BATCH_SIZE,
+        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+        
+        # GRPO specific
+        num_generations=NUM_GENERATIONS,
+        max_prompt_length=MAX_PROMPT_LENGTH,
+        max_completion_length=MAX_COMPLETION_LENGTH,
+        
+        # Training duration
+        num_train_epochs=NUM_TRAIN_EPOCHS,
+        
+        # Evaluation during training
+        eval_strategy="steps",
+        eval_steps=EVAL_STEPS,
+        
+        # Logging and saving
+        logging_steps=LOGGING_STEPS,
+        save_steps=SAVE_STEPS,
+        save_total_limit=10,
+        save_only_model=False,  # Include optimizer state - required for resume
+        
+        # Technical
+        bf16=True,
+        remove_unused_columns=False,  # Keep 'expected' column for reward
+        report_to="wandb",
+        log_on_each_node=False,
+    )
+    
+    # Create trainer
+    print("\n>>> Initializing trainer...")
+    trainer = GRPOTrainer(
+        model=model,
+        processing_class=tokenizer,
+        reward_funcs=[interleave_reward_func],
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
+    )
+    
+    # Train
+    print("\n>>> Starting training...")
+    print("=" * 50)
+    trainer.train()
+    
+    print("\n>>> Training complete!")
+    print(f"    Checkpoints saved to: {OUTPUT_DIR}")
 
-# full parameter tuning
-trainer = GRPOTrainer(
-    model=model,
-    processing_class=tokenizer,
-    reward_funcs=[
-        xmlcount_reward_func,
-        soft_format_reward_func,
-        strict_format_reward_func,
-        int_reward_func,
-        correctness_reward_func],
-    args=training_args,
-    train_dataset=dataset,
- 
-)
-trainer.train()
+
+if __name__ == "__main__":
+    main()
