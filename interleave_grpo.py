@@ -42,7 +42,6 @@ MAX_COMPLETION_LENGTH = 256  # our outputs are ~20 words but leave room
 # Logging and saving
 LOGGING_STEPS = 10
 SAVE_STEPS = 50
-EVAL_STEPS = 50
 
 # ============================================================================
 # TRAINING
@@ -87,21 +86,18 @@ def main():
         
         # Batch sizes
         per_device_train_batch_size=PER_DEVICE_TRAIN_BATCH_SIZE,
-        per_device_eval_batch_size=1,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         
         # GRPO specific
         num_generations=NUM_GENERATIONS,
-        num_generations_eval=1,  # Fewer generations during eval to save memory
         max_prompt_length=MAX_PROMPT_LENGTH,
         max_completion_length=MAX_COMPLETION_LENGTH,
         
         # Training duration
         num_train_epochs=NUM_TRAIN_EPOCHS,
         
-        # Evaluation during training
-        eval_strategy="steps",
-        eval_steps=EVAL_STEPS,
+        # No mid-training eval (use evaluate.py before/after instead)
+        eval_strategy="no",
         
         # Logging and saving
         logging_steps=LOGGING_STEPS,
@@ -124,7 +120,6 @@ def main():
         reward_funcs=[interleave_reward_func],
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=val_dataset,
     )
     
     # Train
