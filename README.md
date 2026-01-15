@@ -53,7 +53,12 @@ python interleave_grpo.py --test  # Loads model, runs 1 step, exits
 ```bash
 python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 ```
-
+## Known issues
+1. There were problems from will's file. some issue with division of:
+  1. gradient_accumulation_steps=4,
+  1. num_generations=16,
+1. learning rate (let adam handle it)
+1. number of steps for comparison needs to be highish
 ## Questions
 1. Is broader system behavior evaluated at different steps in the training process? Above and beyond the per step rewards?
 1. What does WandB integration require?
