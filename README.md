@@ -1,7 +1,7 @@
 # Interleave_GRPO
 
 ## Overview/Flow
-1.
+1. We've demonstrated the ability to train, and train on this task. The next step is exploring boundaries. So at this point, we really should be starting to prepare for publication. This means rigorous data collection
 
 ## Infrastructure
 ### Python scripts
@@ -59,8 +59,10 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
   1. num_generations=16,
 1. learning rate (let adam handle it)
 1. number of steps for comparison needs to be highish
+
 ## Questions
 1. Is broader system behavior evaluated at different steps in the training process? Above and beyond the per step rewards?
+  - 1/15/26 we disabled mid training evaluation due to TRL version issues. checkpoints now saved every 50 steps
 1. What does WandB integration require?
 1. What kind of logging is possible?
 1. This is for a network volume. What's the simplest thing we can do to enable that? Local volume is not persistent.
@@ -82,11 +84,13 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 
 
 ## Todo
+1. I'd like a script that checks for general improvement as a function of training. something like an llm decathalon.
+1. I'd like a way to interact with the models
+1. What's the next training step? full size texts allowing for variable lenghts? more than one process? 
 1. We learned something about learning rate. implement it
 1. Setup wandb account
 1. Llama 3.x 3B Instruct
 1. We need to swap out Will's data set for our own.
-
 1. We need to quantify the behavior before training starts.
 1. We need to make sure that the training and quantification are targeting the same thing. 
 
