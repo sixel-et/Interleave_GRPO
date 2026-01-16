@@ -74,7 +74,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     print(f"Loading model: {args.model}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    
+    # For local checkpoints, load tokenizer from base model
+    import os
+    if os.path.isdir(args.model):
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(args.model)
+    
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         torch_dtype=torch.bfloat16,
