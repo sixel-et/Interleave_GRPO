@@ -25,8 +25,7 @@ VAL_SPLIT = 0.1   # 10% for validation during training
 TEST_SPLIT = 0.1  # 10% held out for evaluate.py
 
 # Fragment length (difficulty dial - start small, increase as model improves)
-NUM_WORDS = 10
-
+NUM_WORDS = 500
 # Random seed for reproducibility
 SEED = 42
 

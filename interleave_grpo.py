@@ -36,8 +36,8 @@ GRADIENT_ACCUMULATION_STEPS = 16
 NUM_GENERATIONS = 16  # Higher = better GRPO gradient estimates
 
 # Generation
-MAX_PROMPT_LENGTH = 512
-MAX_COMPLETION_LENGTH = 256  # our outputs are ~20 words but leave room
+MAX_PROMPT_LENGTH = 2000
+MAX_COMPLETION_LENGTH = 2500  # our outputs are ~20 words but leave room
 
 # Logging and saving
 LOGGING_STEPS = 10
