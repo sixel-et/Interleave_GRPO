@@ -43,7 +43,7 @@ def generate_completion(model, tokenizer, prompt, max_new_tokens=MAX_NEW_TOKENS)
     return completion
 
 
-def run_eval(model, tokenizer, dataset, num_samples=NUM_EVAL_SAMPLES, verbose=False, verbose_rate=10):
+def run_eval(model, tokenizer, dataset, num_samples=NUM_EVAL_SAMPLES, verbose=False, verbose_rate=10, truncate=None):
     """Run evaluation on dataset, return scores."""
     num_samples = min(num_samples, len(dataset))
     scores = []
@@ -60,15 +60,35 @@ def run_eval(model, tokenizer, dataset, num_samples=NUM_EVAL_SAMPLES, verbose=Fa
             print(f"{'='*60}")
             print(f"Sample {i+1}/{num_samples} - Score: {score:.3f}")
             print(f"{'='*60}")
-            print(f"Fragment A: {sample['fragment_a'][:100]}...")
-            print(f"Fragment B: {sample['fragment_b'][:100]}...")
-            print()
-            print(f"Expected ({len(sample['expected'])} words):")
-            print("  " + " ".join(sample['expected'][:20]) + ("..." if len(sample['expected']) > 20 else ""))
-            print()
-            output_words = parse_output(completion)
-            print(f"Model Output ({len(output_words)} words):")
-            print("  " + " ".join(output_words[:20]) + ("..." if len(output_words) > 20 else ""))
+            
+            if truncate:
+                # Truncated mode - for quick sanity check
+                trunc_len = truncate  # character limit
+                print(f"Fragment A: {sample['fragment_a'][:trunc_len]}{'...' if len(sample['fragment_a']) > trunc_len else ''}")
+                print(f"Fragment B: {sample['fragment_b'][:trunc_len]}{'...' if len(sample['fragment_b']) > trunc_len else ''}")
+                print()
+                expected_str = " ".join(sample['expected'])
+                print(f"Expected ({len(sample['expected'])} words):")
+                print(f"  {expected_str[:trunc_len]}{'...' if len(expected_str) > trunc_len else ''}")
+                print()
+                output_words = parse_output(completion)
+                output_str = " ".join(output_words)
+                print(f"Model Output ({len(output_words)} words):")
+                print(f"  {output_str[:trunc_len]}{'...' if len(output_str) > trunc_len else ''}")
+            else:
+                # Full mode - for data validation and notebook recording
+                print(f"Fragment A:")
+                print(sample['fragment_a'])
+                print()
+                print(f"Fragment B:")
+                print(sample['fragment_b'])
+                print()
+                print(f"Expected ({len(sample['expected'])} words):")
+                print(" ".join(sample['expected']))
+                print()
+                output_words = parse_output(completion)
+                print(f"Model Output ({len(output_words)} words):")
+                print(" ".join(output_words))
             print()
             
         if (i + 1) % 10 == 0:
@@ -90,6 +110,8 @@ if __name__ == "__main__":
     parser.add_argument("--samples", type=int, default=NUM_EVAL_SAMPLES, help="Number of samples")
     parser.add_argument("--verbose", action="store_true", help="Show individual completions")
     parser.add_argument("--verbose-rate", type=int, default=10, help="Show verbose output every N samples (default: 10)")
+    parser.add_argument("--truncate", nargs='?', const=100, type=int, default=None,
+                        help="Truncate verbose output to N characters (default: 100 if flag used, full output if omitted)")
     args = parser.parse_args()
     
     print(f"Loading model: {args.model}")
@@ -115,7 +137,7 @@ if __name__ == "__main__":
         _, _, test = generate_dataset()
     
     print(f"Evaluating on {args.samples} samples...")
-    scores = run_eval(model, tokenizer, test, args.samples, verbose=args.verbose, verbose_rate=args.verbose_rate)
+    scores = run_eval(model, tokenizer, test, args.samples, verbose=args.verbose, verbose_rate=args.verbose_rate, truncate=args.truncate)
     
     print()
     print("=" * 40)
