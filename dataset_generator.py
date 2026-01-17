@@ -3,6 +3,16 @@ dataset_generator.py
 
 Generates training data for the interleaving task.
 Samples fragment pairs from source texts and creates prompt + expected output.
+
+Usage:
+    # Generate and save a dataset
+    python dataset_generator.py --num-words 10 --save datasets/10words.jsonl
+    
+    # Generate curriculum (10, 25, 50, 100, 200, 500 words)
+    python dataset_generator.py --curriculum --output-dir datasets/
+    
+    # Preview without saving
+    python dataset_generator.py --num-words 25 --preview 3
 """
 
 import json
@@ -25,12 +35,16 @@ VAL_SPLIT = 0.1   # 10% for validation during training
 TEST_SPLIT = 0.1  # 10% held out for evaluate.py
 
 # Fragment length (difficulty dial - start small, increase as model improves)
-NUM_WORDS = 500
+NUM_WORDS = 10  # Default to easiest level
+
 # Random seed for reproducibility
 SEED = 42
 
 # Output format: "space" for "word1 word2 word3", "newline" for "word1\nword2\nword3"
 OUTPUT_FORMAT = "newline"
+
+# Curriculum stages
+CURRICULUM_STAGES = [10, 25, 50, 100, 200, 500]
 
 # ============================================================================
 # PROMPT TEMPLATE
@@ -173,7 +187,64 @@ def create_sample(
         "expected_str": expected_str,
         "text_a_id": text_a["id"],
         "text_b_id": text_b["id"],
+        "num_words": num_words,  # Track difficulty level
     }
+
+
+# ============================================================================
+# SAVE / LOAD (JSONL format for easy inspection)
+# ============================================================================
+
+def save_jsonl(samples: list[dict], path: str):
+    """Save samples to JSONL file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'w') as f:
+        for sample in samples:
+            f.write(json.dumps(sample) + '\n')
+    print(f"Saved {len(samples)} samples to {path}")
+
+
+def load_jsonl(path: str) -> list[dict]:
+    """Load samples from JSONL file."""
+    samples = []
+    with open(path) as f:
+        for line in f:
+            samples.append(json.loads(line))
+    return samples
+
+
+def load_dataset_from_jsonl(path: str) -> Dataset:
+    """Load JSONL file into HuggingFace Dataset."""
+    samples = load_jsonl(path)
+    
+    dataset_dict = {
+        "prompt": [s["prompt"] for s in samples],
+        "fragment_a": [s["fragment_a"] for s in samples],
+        "fragment_b": [s["fragment_b"] for s in samples],
+        "expected": [s["expected"] for s in samples],
+        "expected_str": [s["expected_str"] for s in samples],
+        "text_a_id": [s["text_a_id"] for s in samples],
+        "text_b_id": [s["text_b_id"] for s in samples],
+    }
+    
+    return Dataset.from_dict(dataset_dict)
+
+
+# ============================================================================
+# DATASET GENERATION
+# ============================================================================
+
+def generate_samples(
+    texts_path: str = SOURCE_TEXTS_PATH,
+    num_samples: int = NUM_SAMPLES,
+    num_words: int = NUM_WORDS,
+    seed: int = SEED,
+) -> list[dict]:
+    """Generate raw samples as list of dicts."""
+    random.seed(seed)
+    texts = load_texts(texts_path)
+    return [create_sample(texts, num_words) for _ in range(num_samples)]
 
 
 def generate_dataset(
@@ -183,6 +254,7 @@ def generate_dataset(
     seed: int = SEED,
     val_split: float = VAL_SPLIT,
     test_split: float = TEST_SPLIT,
+    dataset_path: str = None,  # If provided, load from this JSONL instead of generating
 ) -> tuple[Dataset, Dataset, Dataset]:
     """
     Generate HuggingFace Datasets for training, validation, and testing.
@@ -194,14 +266,20 @@ def generate_dataset(
         seed: random seed for reproducibility
         val_split: fraction for validation (used during training)
         test_split: fraction for test (held out for evaluate.py)
+        dataset_path: if provided, load from this JSONL file instead of generating
     
     Returns:
         (train_dataset, val_dataset, test_dataset)
     """
-    random.seed(seed)
-    texts = load_texts(texts_path)
-    
-    samples = [create_sample(texts, num_words) for _ in range(num_samples)]
+    # Load or generate
+    if dataset_path and Path(dataset_path).exists():
+        print(f"Loading dataset from {dataset_path}")
+        samples = load_jsonl(dataset_path)
+        num_words = samples[0].get("num_words", "unknown") if samples else "unknown"
+        print(f"  Loaded {len(samples)} samples ({num_words} words/fragment)")
+    else:
+        print(f"Generating {num_samples} samples with {num_words} words/fragment...")
+        samples = generate_samples(texts_path, num_samples, num_words, seed)
     
     # Convert to Dataset format
     dataset_dict = {
@@ -230,6 +308,41 @@ def generate_dataset(
     return train_dataset, val_dataset, test_dataset
 
 
+def generate_curriculum(
+    output_dir: str,
+    texts_path: str = SOURCE_TEXTS_PATH,
+    num_samples: int = NUM_SAMPLES,
+    seed: int = SEED,
+    stages: list[int] = None,
+):
+    """Generate datasets for all curriculum stages."""
+    if stages is None:
+        stages = CURRICULUM_STAGES
+    
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"Generating curriculum datasets in {output_dir}/")
+    print(f"Stages: {stages}")
+    print()
+    
+    for num_words in stages:
+        filename = f"{num_words}words.jsonl"
+        path = output_dir / filename
+        
+        samples = generate_samples(texts_path, num_samples, num_words, seed)
+        save_jsonl(samples, path)
+        
+        # Show sample info
+        sample = samples[0]
+        prompt_len = len(sample['prompt'][0]['content'])
+        expected_len = len(sample['expected'])
+        print(f"  {filename}: prompt~{prompt_len} chars, expected~{expected_len} tokens")
+    
+    print()
+    print("Done! Use with: python interleave_grpo.py --dataset datasets/10words.jsonl")
+
+
 # ============================================================================
 # CLI
 # ============================================================================
@@ -244,44 +357,70 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed")
     parser.add_argument("--val-split", type=float, default=VAL_SPLIT, help="Validation split ratio")
     parser.add_argument("--test-split", type=float, default=TEST_SPLIT, help="Test split ratio")
-    parser.add_argument("--output", default=None, help="Output directory (optional, saves to disk)")
     parser.add_argument("--preview", type=int, default=2, help="Number of samples to preview")
+    
+    # Save/load options
+    parser.add_argument("--save", default=None, help="Save to JSONL file")
+    parser.add_argument("--load", default=None, help="Load from JSONL file (ignores generation params)")
+    
+    # Curriculum generation
+    parser.add_argument("--curriculum", action="store_true", help="Generate all curriculum stages")
+    parser.add_argument("--output-dir", default="datasets", help="Output directory for curriculum")
     
     args = parser.parse_args()
     
-    print(f"Generating {args.num_samples} samples with {args.num_words} words per fragment...")
-    print(f"Splits: train={1-args.val_split-args.test_split:.0%}, val={args.val_split:.0%}, test={args.test_split:.0%}")
-    print(f"Output format: {OUTPUT_FORMAT}")
-    print()
+    # Curriculum mode
+    if args.curriculum:
+        generate_curriculum(
+            output_dir=args.output_dir,
+            texts_path=args.texts,
+            num_samples=args.num_samples,
+            seed=args.seed,
+        )
+        exit(0)
     
-    train, val, test = generate_dataset(
-        texts_path=args.texts,
-        num_samples=args.num_samples,
-        num_words=args.num_words,
-        seed=args.seed,
-        val_split=args.val_split,
-        test_split=args.test_split,
-    )
-    
-    print(f"Generated: train={len(train)}, val={len(val)}, test={len(test)}")
-    print()
-    
-    # Preview from train set
-    print("=== Train samples ===")
-    for i in range(min(args.preview, len(train))):
-        sample = train[i]
-        print(f"Sample {i+1}:")
-        print(f"  Text A ({sample['text_a_id']}): {sample['fragment_a']}")
-        print(f"  Text B ({sample['text_b_id']}): {sample['fragment_b']}")
-        print(f"  Expected: {' '.join(sample['expected'][:6])}...")
+    # Load mode
+    if args.load:
+        samples = load_jsonl(args.load)
+        print(f"Loaded {len(samples)} samples from {args.load}")
+        num_words = samples[0].get("num_words", "unknown")
+        print(f"Fragment size: {num_words} words")
+    else:
+        # Generate mode
+        print(f"Generating {args.num_samples} samples with {args.num_words} words per fragment...")
+        print(f"Splits: train={1-args.val_split-args.test_split:.0%}, val={args.val_split:.0%}, test={args.test_split:.0%}")
+        print(f"Output format: {OUTPUT_FORMAT}")
         print()
+        
+        samples = generate_samples(
+            texts_path=args.texts,
+            num_samples=args.num_samples,
+            num_words=args.num_words,
+            seed=args.seed,
+        )
     
     # Save if requested
-    if args.output:
-        from pathlib import Path
-        output_dir = Path(args.output)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        train.save_to_disk(output_dir / "train")
-        val.save_to_disk(output_dir / "val")
-        test.save_to_disk(output_dir / "test")
-        print(f"Saved to {args.output}/{{train,val,test}}")
+    if args.save:
+        save_jsonl(samples, args.save)
+    
+    # Preview
+    print()
+    print(f"=== Preview ({min(args.preview, len(samples))} samples) ===")
+    for i in range(min(args.preview, len(samples))):
+        sample = samples[i]
+        print(f"\nSample {i+1}:")
+        print(f"  Text A ({sample['text_a_id']}): {sample['fragment_a'][:80]}...")
+        print(f"  Text B ({sample['text_b_id']}): {sample['fragment_b'][:80]}...")
+        print(f"  Expected ({len(sample['expected'])} words): {' '.join(sample['expected'][:10])}...")
+        
+        # Show prompt length (important for checking truncation)
+        prompt_len = len(sample['prompt'][0]['content'])
+        print(f"  Prompt length: {prompt_len} chars")
+    
+    # Summary stats
+    if samples:
+        prompt_lens = [len(s['prompt'][0]['content']) for s in samples]
+        expected_lens = [len(s['expected']) for s in samples]
+        print(f"\n=== Stats ===")
+        print(f"  Prompt length: {min(prompt_lens)}-{max(prompt_lens)} chars (avg {sum(prompt_lens)//len(prompt_lens)})")
+        print(f"  Expected length: {min(expected_lens)}-{max(expected_lens)} tokens (avg {sum(expected_lens)//len(expected_lens)})")
