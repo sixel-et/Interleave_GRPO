@@ -43,7 +43,7 @@ def generate_completion(model, tokenizer, prompt, max_new_tokens=MAX_NEW_TOKENS)
     return completion
 
 
-def run_eval(model, tokenizer, dataset, num_samples=NUM_EVAL_SAMPLES):
+def run_eval(model, tokenizer, dataset, num_samples=NUM_EVAL_SAMPLES, verbose=False, verbose_rate=10):
     """Run evaluation on dataset, return scores."""
     num_samples = min(num_samples, len(dataset))
     scores = []
@@ -54,6 +54,23 @@ def run_eval(model, tokenizer, dataset, num_samples=NUM_EVAL_SAMPLES):
         score = compute_alignment_score(sample["expected"], parse_output(completion))
         scores.append(score)
         
+        # Show verbose output for every Nth sample
+        if verbose and (i % verbose_rate == 0):
+            print()
+            print(f"{'='*60}")
+            print(f"Sample {i+1}/{num_samples} - Score: {score:.3f}")
+            print(f"{'='*60}")
+            print(f"Fragment A: {sample['fragment_a'][:100]}...")
+            print(f"Fragment B: {sample['fragment_b'][:100]}...")
+            print()
+            print(f"Expected ({len(sample['expected'])} words):")
+            print("  " + " ".join(sample['expected'][:20]) + ("..." if len(sample['expected']) > 20 else ""))
+            print()
+            output_words = parse_output(completion)
+            print(f"Model Output ({len(output_words)} words):")
+            print("  " + " ".join(output_words[:20]) + ("..." if len(output_words) > 20 else ""))
+            print()
+            
         if (i + 1) % 10 == 0:
             print(f"  {i+1}/{num_samples} - running avg: {sum(scores)/len(scores):.3f}")
     
@@ -72,6 +89,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", default=None, help="Path to JSONL dataset")
     parser.add_argument("--samples", type=int, default=NUM_EVAL_SAMPLES, help="Number of samples")
     parser.add_argument("--verbose", action="store_true", help="Show individual completions")
+    parser.add_argument("--verbose-rate", type=int, default=10, help="Show verbose output every N samples (default: 10)")
     args = parser.parse_args()
     
     print(f"Loading model: {args.model}")
@@ -97,7 +115,7 @@ if __name__ == "__main__":
         _, _, test = generate_dataset()
     
     print(f"Evaluating on {args.samples} samples...")
-    scores = run_eval(model, tokenizer, test, args.samples)
+    scores = run_eval(model, tokenizer, test, args.samples, verbose=args.verbose, verbose_rate=args.verbose_rate)
     
     print()
     print("=" * 40)
