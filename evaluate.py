@@ -69,6 +69,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Evaluate interleaving performance")
     parser.add_argument("--model", default=MODEL_NAME, help="Model name or path")
+    parser.add_argument("--dataset", default=None, help="Path to JSONL dataset")
     parser.add_argument("--samples", type=int, default=NUM_EVAL_SAMPLES, help="Number of samples")
     parser.add_argument("--verbose", action="store_true", help="Show individual completions")
     args = parser.parse_args()
@@ -88,8 +89,12 @@ if __name__ == "__main__":
         device_map="auto",
     )
     
-    print("Generating dataset...")
-    _, _, test = generate_dataset()
+    if args.dataset:
+        print(f"Loading dataset: {args.dataset}")
+        _, _, test = generate_dataset(dataset_path=args.dataset)
+    else:
+        print("Generating dataset...")
+        _, _, test = generate_dataset()
     
     print(f"Evaluating on {args.samples} samples...")
     scores = run_eval(model, tokenizer, test, args.samples)
