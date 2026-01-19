@@ -230,6 +230,7 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 1. 1/18/26 dataset has project gutenberg boilerplate in it. not good. need to remove. sonnet has a script ready(ish)
     - 1/18/26 resolved (I think. I doubt all edge cases have been removed, but enough for research purposes)
 1. dataset_geneartor.py is currently establishing test and val sets at training/evaluation runtime and not at dataset generation time. this. is. bad.
+    - new file: add_splits_to_corpus.py. Should assign a new tag to each entry. will need to manually set gettysbug and hamlet
 1. my need for the network storage right now is more about the environment and less about the actual checkpoints. is it time to create a docker for that stuff so I can blow up a network volume and restart if necessary?
   - maybe the rule of thumb should be if it costs more in money than I get from an hour of overtime, ok, do it, but if it's going to take more time for less savings than i get for an hour of overtime, then fuck it. 
 1. I'd like a script that checks for general improvement as a function of training. something like an llm decathalon.
