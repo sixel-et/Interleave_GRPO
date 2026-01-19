@@ -160,6 +160,75 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
     - 1/15/26 max_prompt_length=512, max_completion_length=256. Working for 10-word fragments. Will need increase for 500-word curriculum.
 
 # Todo
+1. 1/18/26 I'd like to incorporate the methods used/built in the paper "Tracing the Representation Geometry of Language Models from Pretraining to Post-training.
+    - We're changing something about the model, both for the two-interleave, but also for the n-interleave. what is that at the level of geometry?
+    - how do we implement this?
+    - <details>
+        <summary>Implementation detail and plan</summary>
+        
+        **Step 1: Collect hidden states**
+
+        Run N sequences through your model. For each sequence, extract the last-layer, last-token hidden state. This is a vector of dimension d (3072 for Llama-3.2-3B).
+
+        You now have N vectors, each of dimension d. Stack them into matrix F with shape (N, d).
+
+        **Step 2: Compute covariance matrix**
+
+        Center F (subtract mean across samples), then compute:
+
+        Σ = (1/N) × Fᵀ @ F
+
+        This is a (d × d) matrix. Entry Σᵢⱼ tells you how much dimensions i and j co-vary across your population of samples.
+
+        **Step 3: Eigendecompose**
+
+        Get eigenvalues σ₁ ≥ σ₂ ≥ ... ≥ σ_d
+
+        Each eigenvalue tells you how much variance lies along that principal direction. Big σ₁ with tiny rest = representations clustered along one direction. Uniform σᵢ = representations spread across many directions.
+
+        ---
+
+        **Metric 1: RankMe (effective rank)**
+
+        Normalize eigenvalues into a probability distribution:
+
+        pᵢ = σᵢ / Σⱼ σⱼ
+
+        Compute Shannon entropy:
+
+        S = −Σᵢ pᵢ log(pᵢ)
+
+        RankMe = exp(S)
+
+        Intuition: "How many dimensions is the model actually using?" If variance concentrates in 10 directions, RankMe ≈ 10, even if d = 3072.
+
+        ---
+
+        **Metric 2: αReQ (power-law decay rate)**
+
+        Empirical observation: neural network eigenspectra often follow power laws:
+
+        σᵢ ∝ i^(−α)
+
+        Take log of both sides:
+
+        log(σᵢ) = −α × log(i) + constant
+
+        Fit a line on the log-log plot. The slope is −α.
+
+        αReQ is that α.
+
+        Low α → slow decay → many dimensions with substantial variance
+        High α → fast decay → variance concentrated in few dimensions
+
+        ---
+        This means I can check geometry distance between baseline and final checkpoint at each stage, AND I can check between two tasks. something like "recite both texts sequentially" vs "recite both texts by interleaving" 
+
+        The geometry of the two tasks at final checkpoint might be different. 
+      </details>
+        
+1. 1/18/26 dataset has project gutenberg boilerplate in it. not good. need to remove. sonnet has a script ready(ish)
+    - 1/18/26 resolved (I think. I doubt all edge cases have been removed, but enough for research purposes)
 1. dataset_geneartor.py is currently establishing test and val sets at training/evaluation runtime and not at dataset generation time. this. is. bad.
 1. my need for the network storage right now is more about the environment and less about the actual checkpoints. is it time to create a docker for that stuff so I can blow up a network volume and restart if necessary?
   - maybe the rule of thumb should be if it costs more in money than I get from an hour of overtime, ok, do it, but if it's going to take more time for less savings than i get for an hour of overtime, then fuck it. 
@@ -328,6 +397,13 @@ Begin now and continue until complete.
 ### 1/17/26 measuring baseline and two trained models against curriculum
 previous versions of code didn't restart training and didn't have a static dataset. that's changed now. new dataset also includes about 100 new texts with increasing length. new code also has ability to start from a previously saved checkpoint. 
 
+Also realized that the current dataset I have, and evaluate, are working on interleave pairs of varying lenghts. I suspect that doesn't matter much at the lower end (10 or 20 words per text) but is probably starting to effect the numbers as I get into the 50-200 per text (100-400 words total). Since we're actually measuring this shit, we need to remove the confound.
+
+Also evaluate.py is currently just giving me mean, min, and max, which isn't great for actual data analysis. so need to fix that as well.
+
+And we need more texts that are longer for the dataset. having grok put together a script to get them from project gutenberg
+
+new scripts in two files. first gets a list of texts from project gutenberg, and second samples the texts and saves the files. 
 #### Evaluation
 ##### Base model
   - 10 word interleave
@@ -677,9 +753,76 @@ Noticed between 50 and 100 word that the words were being truncated for the outp
       ========================================
 
       ```
-    </details>
+      </details>
 - 100 word interleave
+  - mean: 0.358
+  - max: 0.061
+  - min: 0.881
+  - <details>
+      <summary> evaluate.py output</summary>
 
+      ```
+      (venv) root@e00354cdebcf:/workspace/interleave_grpo# python evaluate.py --samples 100 --verbose --verbose-rate 50 --dataset datasets/100words.jsonl --model outputs/Llama-3B-interleave/10_word_training_run_final_checkpoint/checkpoint-3900
+      Loading model: outputs/Llama-3B-interleave/10_word_training_run_final_checkpoint/checkpoint-3900
+      `torch_dtype` is deprecated! Use `dtype` instead!
+      Loading checkpoint shards: 100%|██████████████████| 2/2 [00:01<00:00,  1.37it/s]
+      Loading dataset: datasets/100words.jsonl
+      Loading dataset from datasets/100words.jsonl
+        Loaded 5000 samples (100 words/fragment)
+      Evaluating on 100 samples...
+      The following generation flags are not valid and may be ignored: ['temperature', 'top_p']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
+      The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+
+      ============================================================
+      Sample 1/100 - Score: 0.654
+      ============================================================
+      Fragment A:
+      that a Dog had got a piece of meat and was carrying it home in his mouth to eat it in peace. Now on his way home he had to cross a plank lying across a running brook. As he crossed, he looked down and saw his own shadow reflected in the water beneath. Thinking it was another dog with another piece of meat, he made up his mind to have that also. So he made a snap at the shadow in the water, but as he opened his mouth the piece of meat fell out, dropped into the water
+
+      Fragment B:
+      Three blind mice. Three blind mice. See how they run. See how they run. They all ran after the farmer's wife, Who cut off their tails with a carving knife, Did you ever see such a sight in your life, As three blind mice?
+
+      Expected (144 words):
+      that Three a blind Dog mice. had Three got blind a mice. piece See of how meat they and run. was See carrying how it they home run. in They his all mouth ran to after eat the it farmer's in wife, peace. Who Now cut on off his their way tails home with he a had carving to knife, cross Did a you plank ever lying see across such a a running sight brook. in As your he life, crossed, As he three looked blind down mice? and saw his own shadow reflected in the water beneath. Thinking it was another dog with another piece of meat, he made up his mind to have that also. So he made a snap at the shadow in the water, but as he opened his mouth the piece of meat fell out, dropped into the water
+
+      Model Output (111 words):
+      that Three a blind Dog mice. had Three got blind a mice. piece See of how meat they and run. was See carrying how it they home run. in See his how mouth they to run. eat As it he in crossed, peace. he Now looked on down his and way saw home his he own had shadow to reflected cross in the water beneath. Thinking it was another dog with another piece of meat, he made up his mind to have that also. So he made a snap at the shadow in the water, but as he opened his mouth the piece of meat fell out, dropped into the water
+
+        10/100 - running avg: 0.395
+        20/100 - running avg: 0.333
+        30/100 - running avg: 0.333
+        40/100 - running avg: 0.355
+        50/100 - running avg: 0.362
+
+      ============================================================
+      Sample 51/100 - Score: 0.339
+      ============================================================
+      Fragment A:
+      be made And crowns for convoy put into his purse: We would not die in that man's company That fears his fellowship to die with us. This day is called the feast of Crispian: He that outlives this day, and comes safe home, Will stand a tip-toe when the day is named, And rouse him at the name of Crispian. He that shall live this day, and see old age, Will yearly on the vigil feast his neighbours, And say 'To-morrow is Saint Crispian:' Then will he strip his sleeve and show his scars. And say 'These wounds I had
+
+      Fragment B:
+      the milky way, They stretched in never-ending line Along the margin of a bay: Ten thousand saw I at a glance, Tossing their heads in sprightly dance. The waves beside them danced; but they Out-did the sparkling waves in glee: A poet could not but be gay, In such a jocund company: I gazed—and gazed—but little thought What wealth the show to me had brought: For oft, when on my couch I lie In vacant or in pensive mood, They flash upon that inward eye Which is the bliss of solitude; And then my heart with pleasure fills, And dances
+
+      Expected (200 words):
+      be the made milky And way, crowns They for stretched convoy in put never-ending into line his Along purse: the We margin would of not a die bay: in Ten that thousand man's saw company I That at fears a his glance, fellowship Tossing to their die heads with in us. sprightly This dance. day The is waves called beside the them feast danced; of but Crispian: they He Out-did that the outlives sparkling this waves day, in and glee: comes A safe poet home, could Will not stand but a be tip-toe gay, when In the such day a is jocund named, company: And I rouse gazed—and him gazed—but at little the thought name What of wealth Crispian. the He show that to shall me live had this brought: day, For and oft, see when old on age, my Will couch yearly I on lie the In vigil vacant feast or his in neighbours, pensive And mood, say They 'To-morrow flash is upon Saint that Crispian:' inward Then eye will Which he is strip the his bliss sleeve of and solitude; show And his then scars. my And heart say with 'These pleasure wounds fills, I And had dances
+
+      Model Output (99 words):
+      be the made milky And way, crowns They for stretched convoy in put never-ending into line his Along the We margin would of not a die in Ten that thousand man's saw company I That at fears a his glance, fellowship Tossing to their die heads with in us. sprightly This dance. day The is waves called beside the them feast danced; of but they A Out-did poet the could sparkling not waves but in A poet could not but be gay, In such a jocund I gazed—and gazed—but little thought What wealth the show to me had brought
+
+        60/100 - running avg: 0.365
+        70/100 - running avg: 0.361
+        80/100 - running avg: 0.356
+        90/100 - running avg: 0.358
+        100/100 - running avg: 0.358
+
+      ========================================
+      Results (100 samples):
+        Mean score: 0.358
+        Min: 0.061
+        Max: 0.881
+      ========================================
+      ```
+  </details>
 ### 1/16/26 first run of 500 word interleave
 first run of 500 word interleave (just decided to go for the gusto). improvement early ( hit 0.86 reward mean ) by step 190, but reward std collapsed from an initial 0.1 range (highest of 0.14 on step 20) to below 0.02. Stayed below 0.02 starting from step 70 and stayed below 0.02 for most of the run (~3200 steps) with only a handful exceeding this. Step 3000 saved with a reward of 0.87. Each step was quite slow. Quite a bit of variability in the length, which makes sense given that the texts were'nt selected for  This experiment run with a form of NW alignment that uses linear penalty for gaps.
 
