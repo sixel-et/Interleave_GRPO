@@ -227,6 +227,8 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
         The geometry of the two tasks at final checkpoint might be different. 
       </details>
         
+1. 1/18/26 Need to put the dataset on HF (can also put checkpoints there as well. 9.99/mo for 1T private isn't bad). apparently github doesn't like datafiles. sonnet recommending huggingface datasets hub
+    - still open. got git lfs up for tonight
 1. 1/18/26 dataset has project gutenberg boilerplate in it. not good. need to remove. sonnet has a script ready(ish)
     - 1/18/26 resolved (I think. I doubt all edge cases have been removed, but enough for research purposes)
 1. dataset_geneartor.py is currently establishing test and val sets at training/evaluation runtime and not at dataset generation time. this. is. bad.
