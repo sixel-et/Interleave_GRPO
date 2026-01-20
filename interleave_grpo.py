@@ -31,7 +31,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainerCallback
 from trl import GRPOConfig, GRPOTrainer
 from dataset_generator import load_jsonl, samples_to_dataset
-from reward import nw_align
+from reward import compute_alignment_score
 import argparse
 from datetime import datetime
 
@@ -136,7 +136,7 @@ def interleave_reward_func(completions, expected, prompts=None, **kwargs):
                 text = str(completion)
             
             tokens = text.split()
-            score = nw_align(tokens, expected_tokens)
+            score = compute_alignment_score(expected_tokens, tokens)
             group_rewards.append(score)
             group_texts.append(text)
         
