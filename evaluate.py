@@ -28,7 +28,7 @@ from reward import compute_alignment_score, parse_output, evaluate_single
 
 MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"
 NUM_EVAL_SAMPLES = 100  # subset of test set
-MAX_NEW_TOKENS = 256
+MAX_NEW_TOKENS = 2500
 
 # ============================================================================
 # RESULT DATA STRUCTURES
