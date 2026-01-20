@@ -3,16 +3,34 @@ interleave_grpo.py
 GRPO training for the interleaving task.
 Based on Will Brown's GSM8K demo.
 
-Usage:
-    python interleave_grpo.py
-    python interleave_grpo.py --resume  # Resume from latest checkpoint
+Usage Examples:
+    # Train from base model on 10-word fragments
+    python interleave_grpo.py --dataset datasets/10words_train.jsonl
+
+    # Resume interrupted training
+    python interleave_grpo.py --dataset datasets/10words_train.jsonl --resume
+
+    # Curriculum learning: start from 10-word checkpoint, train on 25-word data
+    python interleave_grpo.py --model outputs/Llama-3B-interleave/checkpoint-3900 --dataset datasets/25words_train.jsonl
+
+    # Continue curriculum: 25-word checkpoint -> 50-word data
+    python interleave_grpo.py --model outputs/Llama-3B-interleave/checkpoint-XXXX --dataset datasets/50words_train.jsonl
+
+    # Smoke test (1 step only)
+    python interleave_grpo.py --dataset datasets/10words_train.jsonl --test
+
+    # Full curriculum progression
+    python interleave_grpo.py --dataset datasets/10words_train.jsonl
+    python interleave_grpo.py --model outputs/Llama-3B-interleave/checkpoint-3900 --dataset datasets/25words_train.jsonl
+    python interleave_grpo.py --model outputs/Llama-3B-interleave/checkpoint-XXXX --dataset datasets/50words_train.jsonl
+    # ... and so on
 """
 
 import os
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainerCallback
 from trl import GRPOConfig, GRPOTrainer
-from dataset_generator import generate_dataset
+from dataset_generator import load_jsonl, samples_to_dataset
 from reward import nw_align
 import argparse
 from datetime import datetime
@@ -179,7 +197,8 @@ def get_latest_checkpoint(output_dir):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint")
+    parser.add_argument("--model", default=MODEL_NAME, help="Model name or checkpoint path to start from")
+    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint in output dir")
     parser.add_argument("--test", action="store_true", help="Run smoke test (1 step only)")
     parser.add_argument("--dataset", default=None, help="Path to JSONL dataset (if not provided, generates fresh)")
     args = parser.parse_args()
@@ -199,12 +218,19 @@ def main():
     
     # Load dataset
     print("\n>>> Loading dataset...")
-    if args.dataset:
-        print(f"    Using: {args.dataset}")
-    train_dataset, val_dataset, test_dataset = generate_dataset(dataset_path=args.dataset)
-    print(f"    Train: {len(train_dataset)}")
-    print(f"    Val: {len(val_dataset)}")
-    print(f"    Test: {len(test_dataset)} (held out)")
+    if not args.dataset:
+        print("ERROR: No dataset specified!")
+        print("Generate datasets first:")
+        print("  1. python add_splits_to_corpus.py source_texts.json source_texts_split.json")
+        print("  2. python dataset_generator.py --texts source_texts_split.json --save datasets/10words.jsonl")
+        print("Then run:")
+        print("  python interleave_grpo.py --dataset datasets/10words_train.jsonl")
+        exit(1)
+    
+    print(f"    Using: {args.dataset}")
+    samples = load_jsonl(args.dataset)
+    train_dataset = samples_to_dataset(samples)
+    print(f"    Loaded: {len(train_dataset)} samples")
     
     # Show sample prompt for sanity check
     print("\n>>> Sample from training set:")
@@ -214,12 +240,15 @@ def main():
     print(f"    Expected tokens: {len(sample['expected'])} total, first 10: {sample['expected'][:10]}")
     
     # Load model and tokenizer
-    print(f"\n>>> Loading model: {MODEL_NAME}")
+    model_path = args.model
+    print(f"\n>>> Loading model: {model_path}")
+    
+    # Always load tokenizer from base model for consistency
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
     
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
+        model_path,
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
         device_map=None,
