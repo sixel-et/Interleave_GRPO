@@ -9,6 +9,40 @@ Features for publication:
 - Alignment statistics and error analysis
 - Score distribution visualization data
 - Reproducible test set evaluation
+
+Usage Examples:
+    # Quick eval - just print summary to stdout
+    python evaluate.py --dataset datasets/10words_test.jsonl --model meta-llama/Llama-3.2-3B-Instruct --samples 100
+
+    # Eval trained checkpoint
+    python evaluate.py --dataset datasets/10words_test.jsonl --model outputs/Llama-3B-interleave/checkpoint-3900 --samples 500
+
+    # Verbose mode - show individual samples
+    python evaluate.py --dataset datasets/100words_test.jsonl --model checkpoint-3900 --samples 50 --verbose --verbose-rate 10
+
+    # Verbose with truncation for quick sanity check
+    python evaluate.py --dataset datasets/100words_test.jsonl --model checkpoint-3900 --samples 20 --verbose --verbose-rate 5 --truncate 100
+
+    # Export all formats for publication
+    python evaluate.py --dataset datasets/10words_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/10words/
+
+    # Export just JSON (per-sample details)
+    python evaluate.py --dataset datasets/10words_test.jsonl --model checkpoint-3900 --samples 500 --export-json results/10words_results.json
+
+    # Export just summary stats
+    python evaluate.py --dataset datasets/10words_test.jsonl --model checkpoint-3900 --samples 500 --export-summary results/10words_summary.json
+
+    # Full test set evaluation with all exports
+    python evaluate.py --dataset datasets/10words_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/baseline/ --verbose --verbose-rate 100
+
+    # Compare baseline vs trained (run separately, different output dirs)
+    python evaluate.py --dataset datasets/10words_test.jsonl --model meta-llama/Llama-3.2-3B-Instruct --samples 500 --export-all results/baseline/
+    python evaluate.py --dataset datasets/10words_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/trained/
+
+    # Curriculum evaluation across difficulties
+    for words in 10 25 50 100 200 500; do
+        python evaluate.py --dataset datasets/${words}words_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/${words}words/
+    done
 """
 
 import torch
@@ -49,8 +83,10 @@ class SampleResult:
     text_b_id: str
     fragment_a: str
     fragment_b: str
-    expected_str: str
-    output_str: str
+    prompt_text: str        # full prompt sent to model
+    expected_str: str       # ground truth interleaved output
+    raw_completion: str     # raw model output before parsing
+    output_str: str         # parsed model output used for scoring
     # Optional detailed alignment (for verbose mode)
     aligned_expected: Optional[list] = None
     aligned_output: Optional[list] = None
@@ -122,6 +158,13 @@ def evaluate_sample(
     # Get detailed alignment info
     result = evaluate_single(sample["expected"], completion, verbose=verbose)
     
+    # Extract prompt text
+    prompt = sample["prompt"]
+    if isinstance(prompt, list) and len(prompt) > 0:
+        prompt_text = prompt[0].get("content", str(prompt))
+    else:
+        prompt_text = str(prompt)
+    
     return SampleResult(
         sample_id=sample_id,
         score=result["score"],
@@ -135,7 +178,9 @@ def evaluate_sample(
         text_b_id=sample.get("text_b_id", ""),
         fragment_a=sample["fragment_a"],
         fragment_b=sample["fragment_b"],
+        prompt_text=prompt_text,
         expected_str=" ".join(sample["expected"]),
+        raw_completion=completion,
         output_str=" ".join(output_words),
         aligned_expected=result.get("aligned_expected"),
         aligned_output=result.get("aligned_output"),
@@ -270,7 +315,8 @@ def export_results_csv(results: list[SampleResult], path: str):
     fieldnames = [
         'sample_id', 'score', 'raw_score', 'expected_len', 'output_len',
         'matches', 'mismatches', 'gaps', 'text_a_id', 'text_b_id',
-        'fragment_a', 'fragment_b', 'expected_str', 'output_str'
+        'fragment_a', 'fragment_b', 'prompt_text', 'expected_str', 
+        'raw_completion', 'output_str'
     ]
     
     with open(path, 'w', newline='', encoding='utf-8') as f:
