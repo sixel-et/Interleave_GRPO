@@ -4,8 +4,12 @@ dataset_generator.py
 Generates training data for the interleaving task.
 Samples fragment pairs from source texts and creates prompt + expected output.
 
+IMPORTANT: Source texts must have a "split" field (train/val/test) to ensure
+zero text leakage between splits. Use add_splits_to_corpus.py to add splits
+to your corpus first.
+
 Usage:
-    # Generate and save a dataset
+    # Generate and save datasets (respects corpus split tags)
     python dataset_generator.py --num-words 10 --save datasets/10words.jsonl
     
     # Generate curriculum (10, 25, 50, 100, 200, 500 words)
@@ -27,12 +31,10 @@ from datasets import Dataset
 # Paths
 SOURCE_TEXTS_PATH = "source_texts.json"
 
-# Dataset size
-NUM_SAMPLES = 5000
-
-# Train/val/test split ratios
-VAL_SPLIT = 0.1   # 10% for validation during training
-TEST_SPLIT = 0.1  # 10% held out for evaluate.py
+# Dataset size (per split - train will get more, val/test fewer)
+NUM_TRAIN_SAMPLES = 4000
+NUM_VAL_SAMPLES = 500
+NUM_TEST_SAMPLES = 500
 
 # Fragment length (difficulty dial - start small, increase as model improves)
 NUM_WORDS = 10  # Default to easiest level
@@ -76,11 +78,72 @@ Begin now and continue until complete."""
 # CORE FUNCTIONS
 # ============================================================================
 
-def load_texts(path: str = SOURCE_TEXTS_PATH) -> list[dict]:
-    """Load source texts from JSON file."""
+def load_texts(path: str = SOURCE_TEXTS_PATH, split: str = None) -> list[dict]:
+    """
+    Load source texts from JSON file, optionally filtering by split.
+    
+    Args:
+        path: Path to corpus JSON file
+        split: If provided, only return texts with this split tag ("train", "val", "test")
+    
+    Returns:
+        List of text records (dicts with 'id', 'text', 'source', and optionally 'split')
+    """
     with open(path) as f:
         data = json.load(f)
-    return data["texts"]
+    
+    texts = data["texts"]
+    
+    if split is not None:
+        # Filter by split tag
+        filtered = [t for t in texts if t.get("split") == split]
+        if not filtered:
+            available_splits = set(t.get("split", "NONE") for t in texts)
+            raise ValueError(
+                f"No texts found with split='{split}'. "
+                f"Available splits: {available_splits}. "
+                f"Run add_splits_to_corpus.py first if corpus lacks split tags."
+            )
+        return filtered
+    
+    return texts
+
+
+def load_texts_by_split(path: str = SOURCE_TEXTS_PATH) -> dict[str, list[dict]]:
+    """
+    Load corpus and return texts organized by split.
+    
+    Returns:
+        Dict with keys 'train', 'val', 'test', each containing list of texts
+    """
+    with open(path) as f:
+        data = json.load(f)
+    
+    texts = data["texts"]
+    
+    # Check if corpus has split tags
+    if not any("split" in t for t in texts):
+        raise ValueError(
+            "Corpus has no split tags! Run add_splits_to_corpus.py first:\n"
+            "  python add_splits_to_corpus.py source_texts.json source_texts_split.json"
+        )
+    
+    splits = {"train": [], "val": [], "test": []}
+    untagged = []
+    
+    for t in texts:
+        split = t.get("split")
+        if split in splits:
+            splits[split].append(t)
+        else:
+            untagged.append(t)
+    
+    if untagged:
+        print(f"WARNING: {len(untagged)} texts have no/invalid split tag and will be ignored")
+    
+    print(f"Corpus loaded: train={len(splits['train'])}, val={len(splits['val'])}, test={len(splits['test'])} texts")
+    
+    return splits
 
 
 def extract_words(text: str) -> list[str]:
@@ -139,7 +202,15 @@ def create_sample(
     text_b_idx: int = None,
 ) -> dict:
     """
-    Create a single training sample.
+    Create a single training sample from a list of texts.
+    
+    IMPORTANT: Pass only texts from the same split to ensure zero leakage.
+    
+    Args:
+        texts: List of text records (should be pre-filtered by split)
+        num_words: Words per fragment
+        text_a_idx: Optional specific index for text A
+        text_b_idx: Optional specific index for text B
     
     Returns dict with:
         - prompt: formatted chat messages
@@ -150,6 +221,9 @@ def create_sample(
         - text_a_id: source text A identifier
         - text_b_id: source text B identifier
     """
+    if len(texts) < 2:
+        raise ValueError(f"Need at least 2 texts to create sample, got {len(texts)}")
+    
     # Pick two different texts
     if text_a_idx is None or text_b_idx is None:
         indices = random.sample(range(len(texts)), 2)
@@ -217,7 +291,11 @@ def load_jsonl(path: str) -> list[dict]:
 def load_dataset_from_jsonl(path: str) -> Dataset:
     """Load JSONL file into HuggingFace Dataset."""
     samples = load_jsonl(path)
-    
+    return samples_to_dataset(samples)
+
+
+def samples_to_dataset(samples: list[dict]) -> Dataset:
+    """Convert list of sample dicts to HuggingFace Dataset."""
     dataset_dict = {
         "prompt": [s["prompt"] for s in samples],
         "fragment_a": [s["fragment_a"] for s in samples],
@@ -227,120 +305,265 @@ def load_dataset_from_jsonl(path: str) -> Dataset:
         "text_a_id": [s["text_a_id"] for s in samples],
         "text_b_id": [s["text_b_id"] for s in samples],
     }
-    
     return Dataset.from_dict(dataset_dict)
 
 
 # ============================================================================
-# DATASET GENERATION
+# DATASET GENERATION (SPLIT-AWARE)
 # ============================================================================
 
-def generate_samples(
-    texts_path: str = SOURCE_TEXTS_PATH,
-    num_samples: int = NUM_SAMPLES,
+def generate_samples_for_split(
+    texts: list[dict],
+    num_samples: int,
     num_words: int = NUM_WORDS,
     seed: int = SEED,
 ) -> list[dict]:
-    """Generate raw samples as list of dicts."""
+    """
+    Generate samples using only the provided texts (should be pre-filtered by split).
+    
+    Args:
+        texts: List of text records (pre-filtered to a single split)
+        num_samples: Number of samples to generate
+        num_words: Words per fragment
+        seed: Random seed
+    
+    Returns:
+        List of sample dicts
+    """
     random.seed(seed)
-    texts = load_texts(texts_path)
     return [create_sample(texts, num_words) for _ in range(num_samples)]
+
+
+def generate_all_splits(
+    texts_path: str = SOURCE_TEXTS_PATH,
+    num_train: int = NUM_TRAIN_SAMPLES,
+    num_val: int = NUM_VAL_SAMPLES,
+    num_test: int = NUM_TEST_SAMPLES,
+    num_words: int = NUM_WORDS,
+    seed: int = SEED,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """
+    Generate train/val/test samples with zero text leakage.
+    
+    Each split's samples are generated only from texts tagged with that split.
+    
+    Args:
+        texts_path: Path to corpus JSON with split tags
+        num_train: Number of training samples
+        num_val: Number of validation samples
+        num_test: Number of test samples
+        num_words: Words per fragment
+        seed: Random seed
+    
+    Returns:
+        (train_samples, val_samples, test_samples) as lists of dicts
+    """
+    # Load texts organized by split
+    texts_by_split = load_texts_by_split(texts_path)
+    
+    print(f"\nGenerating samples with {num_words} words/fragment...")
+    
+    # Generate each split independently (different seed offsets for variety)
+    train_samples = generate_samples_for_split(
+        texts_by_split["train"], num_train, num_words, seed
+    )
+    val_samples = generate_samples_for_split(
+        texts_by_split["val"], num_val, num_words, seed + 1000
+    )
+    test_samples = generate_samples_for_split(
+        texts_by_split["test"], num_test, num_words, seed + 2000
+    )
+    
+    print(f"Generated: train={len(train_samples)}, val={len(val_samples)}, test={len(test_samples)}")
+    
+    return train_samples, val_samples, test_samples
+
+
+def save_all_splits(
+    train_samples: list[dict],
+    val_samples: list[dict],
+    test_samples: list[dict],
+    base_path: str,
+    seed: int = SEED,
+) -> dict:
+    """
+    Save train/val/test samples to separate JSONL files.
+    
+    Args:
+        train_samples, val_samples, test_samples: Sample lists
+        base_path: Path like 'datasets/10words.jsonl'
+                   Creates: 10words_train.jsonl, 10words_val.jsonl, 10words_test.jsonl
+        seed: Random seed used (for metadata)
+    
+    Returns:
+        Dict with file paths
+    """
+    base = Path(base_path)
+    stem = base.stem
+    suffix = base.suffix
+    parent = base.parent
+    
+    train_path = parent / f"{stem}_train{suffix}"
+    val_path = parent / f"{stem}_val{suffix}"
+    test_path = parent / f"{stem}_test{suffix}"
+    
+    save_jsonl(train_samples, train_path)
+    save_jsonl(val_samples, val_path)
+    save_jsonl(test_samples, test_path)
+    
+    # Save metadata
+    metadata = {
+        "seed": seed,
+        "num_words": train_samples[0].get("num_words") if train_samples else None,
+        "train_samples": len(train_samples),
+        "val_samples": len(val_samples),
+        "test_samples": len(test_samples),
+        "zero_text_leakage": True,  # Mark that this was generated properly
+        "files": {
+            "train": str(train_path),
+            "val": str(val_path),
+            "test": str(test_path),
+        }
+    }
+    metadata_path = parent / f"{stem}_metadata.json"
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    print(f"Saved metadata to {metadata_path}")
+    
+    return {
+        "train": str(train_path),
+        "val": str(val_path),
+        "test": str(test_path),
+        "metadata": str(metadata_path),
+    }
+
+
+def load_splits(base_path: str) -> tuple[list[dict], list[dict], list[dict]]:
+    """
+    Load train/val/test samples from separate JSONL files.
+    
+    Args:
+        base_path: Path like 'datasets/10words.jsonl'
+                   Looks for: 10words_train.jsonl, 10words_val.jsonl, 10words_test.jsonl
+    
+    Returns:
+        (train_samples, val_samples, test_samples) as lists of dicts
+    """
+    base = Path(base_path)
+    stem = base.stem
+    suffix = base.suffix
+    parent = base.parent
+    
+    train_path = parent / f"{stem}_train{suffix}"
+    val_path = parent / f"{stem}_val{suffix}"
+    test_path = parent / f"{stem}_test{suffix}"
+    
+    if not train_path.exists():
+        raise FileNotFoundError(
+            f"Split files not found. Expected: {train_path}\n"
+            f"Generate with: python dataset_generator.py --save {base_path}"
+        )
+    
+    train_samples = load_jsonl(train_path)
+    val_samples = load_jsonl(val_path)
+    test_samples = load_jsonl(test_path)
+    
+    print(f"Loaded: train={len(train_samples)}, val={len(val_samples)}, test={len(test_samples)}")
+    
+    return train_samples, val_samples, test_samples
 
 
 def generate_dataset(
     texts_path: str = SOURCE_TEXTS_PATH,
-    num_samples: int = NUM_SAMPLES,
+    num_train: int = NUM_TRAIN_SAMPLES,
+    num_val: int = NUM_VAL_SAMPLES,
+    num_test: int = NUM_TEST_SAMPLES,
     num_words: int = NUM_WORDS,
     seed: int = SEED,
-    val_split: float = VAL_SPLIT,
-    test_split: float = TEST_SPLIT,
-    dataset_path: str = None,  # If provided, load from this JSONL instead of generating
+    dataset_path: str = None,  # If provided, load from pre-saved files
 ) -> tuple[Dataset, Dataset, Dataset]:
     """
-    Generate HuggingFace Datasets for training, validation, and testing.
+    Generate or load HuggingFace Datasets for training, validation, and testing.
+    
+    Ensures zero text leakage by using corpus-level split tags.
     
     Args:
-        texts_path: path to source_texts.json
-        num_samples: total number of samples to generate
-        num_words: words per fragment (controls difficulty)
-        seed: random seed for reproducibility
-        val_split: fraction for validation (used during training)
-        test_split: fraction for test (held out for evaluate.py)
-        dataset_path: if provided, load from this JSONL file instead of generating
+        texts_path: Path to corpus JSON with split tags
+        num_train: Number of training samples (ignored if loading)
+        num_val: Number of validation samples (ignored if loading)
+        num_test: Number of test samples (ignored if loading)
+        num_words: Words per fragment (ignored if loading)
+        seed: Random seed (ignored if loading)
+        dataset_path: If provided, load from pre-saved split files
     
     Returns:
-        (train_dataset, val_dataset, test_dataset)
+        (train_dataset, val_dataset, test_dataset) as HuggingFace Datasets
     """
-    # Load or generate
-    if dataset_path and Path(dataset_path).exists():
-        print(f"Loading dataset from {dataset_path}")
-        samples = load_jsonl(dataset_path)
-        num_words = samples[0].get("num_words", "unknown") if samples else "unknown"
-        print(f"  Loaded {len(samples)} samples ({num_words} words/fragment)")
+    if dataset_path:
+        # Load from pre-saved files
+        train_samples, val_samples, test_samples = load_splits(dataset_path)
     else:
-        print(f"Generating {num_samples} samples with {num_words} words/fragment...")
-        samples = generate_samples(texts_path, num_samples, num_words, seed)
+        # Generate fresh
+        train_samples, val_samples, test_samples = generate_all_splits(
+            texts_path, num_train, num_val, num_test, num_words, seed
+        )
     
-    # Convert to Dataset format
-    dataset_dict = {
-        "prompt": [s["prompt"] for s in samples],
-        "fragment_a": [s["fragment_a"] for s in samples],
-        "fragment_b": [s["fragment_b"] for s in samples],
-        "expected": [s["expected"] for s in samples],
-        "expected_str": [s["expected_str"] for s in samples],
-        "text_a_id": [s["text_a_id"] for s in samples],
-        "text_b_id": [s["text_b_id"] for s in samples],
-    }
-    
-    full_dataset = Dataset.from_dict(dataset_dict)
-    
-    # Split: first separate test, then split remainder into train/val
-    temp_test = full_dataset.train_test_split(test_size=test_split, seed=seed)
-    test_dataset = temp_test["test"]
-    
-    train_val = temp_test["train"].train_test_split(
-        test_size=val_split / (1 - test_split), 
-        seed=seed
+    return (
+        samples_to_dataset(train_samples),
+        samples_to_dataset(val_samples),
+        samples_to_dataset(test_samples),
     )
-    train_dataset = train_val["train"]
-    val_dataset = train_val["test"]
-    
-    return train_dataset, val_dataset, test_dataset
 
 
 def generate_curriculum(
     output_dir: str,
     texts_path: str = SOURCE_TEXTS_PATH,
-    num_samples: int = NUM_SAMPLES,
+    num_train: int = NUM_TRAIN_SAMPLES,
+    num_val: int = NUM_VAL_SAMPLES,
+    num_test: int = NUM_TEST_SAMPLES,
     seed: int = SEED,
     stages: list[int] = None,
 ):
-    """Generate datasets for all curriculum stages."""
+    """Generate datasets for all curriculum stages with zero text leakage."""
     if stages is None:
         stages = CURRICULUM_STAGES
     
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"Generating curriculum datasets in {output_dir}/")
+    # Load texts once (verifies split tags exist)
+    texts_by_split = load_texts_by_split(texts_path)
+    
+    print(f"\nGenerating curriculum datasets in {output_dir}/")
     print(f"Stages: {stages}")
+    print(f"Samples per stage: train={num_train}, val={num_val}, test={num_test}")
     print()
     
     for num_words in stages:
-        filename = f"{num_words}words.jsonl"
-        path = output_dir / filename
+        print(f"\n--- {num_words} words ---")
         
-        samples = generate_samples(texts_path, num_samples, num_words, seed)
-        save_jsonl(samples, path)
+        # Generate samples for each split
+        train = generate_samples_for_split(texts_by_split["train"], num_train, num_words, seed)
+        val = generate_samples_for_split(texts_by_split["val"], num_val, num_words, seed + 1000)
+        test = generate_samples_for_split(texts_by_split["test"], num_test, num_words, seed + 2000)
+        
+        # Save
+        base_path = output_dir / f"{num_words}words.jsonl"
+        save_all_splits(train, val, test, base_path, seed)
         
         # Show sample info
-        sample = samples[0]
+        sample = train[0]
         prompt_len = len(sample['prompt'][0]['content'])
         expected_len = len(sample['expected'])
-        print(f"  {filename}: prompt~{prompt_len} chars, expected~{expected_len} tokens")
+        print(f"  prompt~{prompt_len} chars, expected~{expected_len} tokens")
     
     print()
-    print("Done! Use with: python interleave_grpo.py --dataset datasets/10words.jsonl")
+    print("="*60)
+    print("Done! Use with:")
+    print(f"  python interleave_grpo.py --dataset {output_dir}/10words.jsonl")
+    print()
+    print("Zero text leakage verified: train/val/test use separate source texts")
+    print("="*60)
 
 
 # ============================================================================
@@ -350,18 +573,18 @@ def generate_curriculum(
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Generate interleaving dataset")
-    parser.add_argument("--texts", default=SOURCE_TEXTS_PATH, help="Path to source texts JSON")
-    parser.add_argument("--num-samples", type=int, default=NUM_SAMPLES, help="Total number of samples")
+    parser = argparse.ArgumentParser(description="Generate interleaving dataset (split-aware)")
+    parser.add_argument("--texts", default=SOURCE_TEXTS_PATH, help="Path to corpus JSON with split tags")
+    parser.add_argument("--num-train", type=int, default=NUM_TRAIN_SAMPLES, help="Training samples")
+    parser.add_argument("--num-val", type=int, default=NUM_VAL_SAMPLES, help="Validation samples")
+    parser.add_argument("--num-test", type=int, default=NUM_TEST_SAMPLES, help="Test samples")
     parser.add_argument("--num-words", type=int, default=NUM_WORDS, help="Words per fragment")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed")
-    parser.add_argument("--val-split", type=float, default=VAL_SPLIT, help="Validation split ratio")
-    parser.add_argument("--test-split", type=float, default=TEST_SPLIT, help="Test split ratio")
     parser.add_argument("--preview", type=int, default=2, help="Number of samples to preview")
     
     # Save/load options
-    parser.add_argument("--save", default=None, help="Save to JSONL file")
-    parser.add_argument("--load", default=None, help="Load from JSONL file (ignores generation params)")
+    parser.add_argument("--save", default=None, help="Save to JSONL (creates _train/_val/_test files)")
+    parser.add_argument("--load", default=None, help="Load from pre-saved split files")
     
     # Curriculum generation
     parser.add_argument("--curriculum", action="store_true", help="Generate all curriculum stages")
@@ -374,38 +597,45 @@ if __name__ == "__main__":
         generate_curriculum(
             output_dir=args.output_dir,
             texts_path=args.texts,
-            num_samples=args.num_samples,
+            num_train=args.num_train,
+            num_val=args.num_val,
+            num_test=args.num_test,
             seed=args.seed,
         )
         exit(0)
     
     # Load mode
     if args.load:
-        samples = load_jsonl(args.load)
-        print(f"Loaded {len(samples)} samples from {args.load}")
-        num_words = samples[0].get("num_words", "unknown")
+        train_samples, val_samples, test_samples = load_splits(args.load)
+        samples = train_samples  # Preview train by default
+        num_words = samples[0].get("num_words", "unknown") if samples else "unknown"
         print(f"Fragment size: {num_words} words")
     else:
         # Generate mode
-        print(f"Generating {args.num_samples} samples with {args.num_words} words per fragment...")
-        print(f"Splits: train={1-args.val_split-args.test_split:.0%}, val={args.val_split:.0%}, test={args.test_split:.0%}")
+        print(f"Generating samples with {args.num_words} words per fragment...")
+        print(f"  Train: {args.num_train}")
+        print(f"  Val:   {args.num_val}")
+        print(f"  Test:  {args.num_test}")
         print(f"Output format: {OUTPUT_FORMAT}")
         print()
         
-        samples = generate_samples(
+        train_samples, val_samples, test_samples = generate_all_splits(
             texts_path=args.texts,
-            num_samples=args.num_samples,
+            num_train=args.num_train,
+            num_val=args.num_val,
+            num_test=args.num_test,
             num_words=args.num_words,
             seed=args.seed,
         )
+        samples = train_samples  # Preview train
     
     # Save if requested
     if args.save:
-        save_jsonl(samples, args.save)
+        save_all_splits(train_samples, val_samples, test_samples, args.save, args.seed)
     
     # Preview
     print()
-    print(f"=== Preview ({min(args.preview, len(samples))} samples) ===")
+    print(f"=== Preview ({min(args.preview, len(samples))} train samples) ===")
     for i in range(min(args.preview, len(samples))):
         sample = samples[i]
         print(f"\nSample {i+1}:")
@@ -413,14 +643,16 @@ if __name__ == "__main__":
         print(f"  Text B ({sample['text_b_id']}): {sample['fragment_b'][:80]}...")
         print(f"  Expected ({len(sample['expected'])} words): {' '.join(sample['expected'][:10])}...")
         
-        # Show prompt length (important for checking truncation)
+        # Show prompt length
         prompt_len = len(sample['prompt'][0]['content'])
         print(f"  Prompt length: {prompt_len} chars")
     
     # Summary stats
-    if samples:
-        prompt_lens = [len(s['prompt'][0]['content']) for s in samples]
-        expected_lens = [len(s['expected']) for s in samples]
-        print(f"\n=== Stats ===")
-        print(f"  Prompt length: {min(prompt_lens)}-{max(prompt_lens)} chars (avg {sum(prompt_lens)//len(prompt_lens)})")
-        print(f"  Expected length: {min(expected_lens)}-{max(expected_lens)} tokens (avg {sum(expected_lens)//len(expected_lens)})")
+    all_samples = train_samples + val_samples + test_samples
+    if all_samples:
+        prompt_lens = [len(s['prompt'][0]['content']) for s in all_samples]
+        expected_lens = [len(s['expected']) for s in all_samples]
+        print(f"\n=== Stats (all splits) ===")
+        print(f"  Total samples: {len(all_samples)}")
+        print(f"  Prompt length: {min(prompt_lens)}-{max(prompt_lens)} chars")
+        print(f"  Expected length: {min(expected_lens)}-{max(expected_lens)} tokens")
