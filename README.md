@@ -397,6 +397,39 @@ Do this all in one turn.
 Begin now and continue until complete.
 
 ## Experimental record
+### 1/19/26 Splitting corpus into test, val, and train
+
+Corpus now includes 4164 texts. details below. Also going to split 
+<details>
+  <Summary> Summary of corpus </summary>
+  
+  ```  
+    Word count distribution:
+      Min:  202
+      Max:  6789
+      Mean: 4774
+      Median: 4879
+
+    Curriculum stage availability:
+      10w: 4164 texts → 8,667,366 max pairs
+      25w: 4164 texts → 8,667,366 max pairs
+      50w: 4164 texts → 8,667,366 max pairs
+      100w: 4164 texts → 8,667,366 max pairs
+      200w: 4164 texts → 8,667,366 max pairs
+      500w: 4128 texts → 8,518,128 max  pairs
+
+    General text availability:
+      ≥ 300w: 4140/4164 (99.4%)
+      ≥ 500w: 4128/4164 (99.1%)
+      ≥1000w: 4102/4164 (98.5%)
+      ≥2000w: 4082/4164 (98.0%)
+      ≥5000w: 14/4164 (0.3%)
+
+    Saving to source_texts_cleaned.json...
+    Saved 4164 texts (109.06 MB)  
+  ```
+</details>
+
 ### 1/17/26 measuring baseline and two trained models against curriculum
 previous versions of code didn't restart training and didn't have a static dataset. that's changed now. new dataset also includes about 100 new texts with increasing length. new code also has ability to start from a previously saved checkpoint. 
 
