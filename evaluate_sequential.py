@@ -1,7 +1,7 @@
 """
-evaluate.py
+evaluate_sequential.py
 
-Standalone evaluation script for pre/post training baselines.
+Standalone evaluation script for sequential recitation tasks.
 Uses same reward logic as training.
 
 Features for publication:
@@ -11,37 +11,44 @@ Features for publication:
 - Reproducible test set evaluation
 
 Usage Examples:
-    # Quick eval - just print summary to stdout
-    python evaluate.py --dataset datasets/10words_test.jsonl --model meta-llama/Llama-3.2-3B-Instruct --samples 100
+    # Generate test-only dataset for evaluation
+    python dataset_generator_unified.py --mode sequential --only-split test --num-words 100 --save datasets/100words_sequential_test.jsonl
 
-    # Eval trained checkpoint
-    python evaluate.py --dataset datasets/10words_test.jsonl --model outputs/Llama-3B-interleave/checkpoint-3900 --samples 500
+    # Or generate samples on-the-fly for testing (if datasets library unavailable)
+    python dataset_generator_unified.py --mode sequential --only-split test --num-words 100 --print-samples > datasets/100words_sequential_test.jsonl
 
-    # Verbose mode - show individual samples
-    python evaluate.py --dataset datasets/100words_test.jsonl --model checkpoint-3900 --samples 50 --verbose --verbose-rate 10
+    # Quick eval for sequential recitation - just print summary to stdout
+    python evaluate_sequential.py --dataset datasets/10words_sequential_test.jsonl --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 
-    # Verbose with truncation for quick sanity check
-    python evaluate.py --dataset datasets/100words_test.jsonl --model checkpoint-3900 --samples 20 --verbose --verbose-rate 5 --truncate 100
+    # Eval trained checkpoint on sequential task
+    python evaluate_sequential.py --dataset datasets/100words_sequential_test.jsonl --model outputs/Llama-3B-interleave/checkpoint-3900 --samples 500
 
-    # Export all formats for publication
-    python evaluate.py --dataset datasets/10words_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/10words/
+    # Verbose mode - show individual samples for sequential
+    python evaluate_sequential.py --dataset datasets/100words_sequential_test.jsonl --model checkpoint-3900 --samples 50 --verbose --verbose-rate 10
 
-    # Export just JSON (per-sample details)
-    python evaluate.py --dataset datasets/10words_test.jsonl --model checkpoint-3900 --samples 500 --export-json results/10words_results.json
+    # Verbose with truncation for quick sanity check on sequential
+    python evaluate_sequential.py --dataset datasets/100words_sequential_test.jsonl --model checkpoint-3900 --samples 20 --verbose --verbose-rate 5 --truncate 100
 
-    # Export just summary stats
-    python evaluate.py --dataset datasets/10words_test.jsonl --model checkpoint-3900 --samples 500 --export-summary results/10words_summary.json
+    # Export all formats for publication on sequential results
+    python evaluate_sequential.py --dataset datasets/10words_sequential_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/sequential/
 
-    # Full test set evaluation with all exports
-    python evaluate.py --dataset datasets/10words_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/baseline/ --verbose --verbose-rate 100
+    # Export just JSON (per-sample details for sequential)
+    python evaluate_sequential.py --dataset datasets/10words_sequential_test.jsonl --model checkpoint-3900 --samples 500 --export-json results/sequential_results.json
 
-    # Compare baseline vs trained (run separately, different output dirs)
-    python evaluate.py --dataset datasets/10words_test.jsonl --model meta-llama/Llama-3.2-3B-Instruct --samples 500 --export-all results/baseline/
-    python evaluate.py --dataset datasets/10words_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/trained/
+    # Export just summary stats for sequential
+    python evaluate_sequential.py --dataset datasets/10words_sequential_test.jsonl --model checkpoint-3900 --samples 500 --export-summary results/sequential_summary.json
 
-    # Curriculum evaluation across difficulties
+    # Full test set evaluation with all exports for sequential
+    python evaluate_sequential.py --dataset datasets/10words_sequential_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/sequential_baseline/ --verbose --verbose-rate 100
+
+    # Compare baseline vs trained on sequential (run separately, different output dirs)
+    python evaluate_sequential.py --dataset datasets/100words_sequential_test.jsonl --model meta-llama/Llama-3.2-3B-Instruct --samples 500 --export-all results/sequential_baseline/
+    python evaluate_sequential.py --dataset datasets/100words_sequential_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/sequential_trained/
+
+    # Curriculum evaluation across difficulties for sequential
     for words in 10 25 50 100 200 500; do
-        python evaluate.py --dataset datasets/${words}words_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/${words}words/
+        python dataset_generator_unified.py --mode sequential --only-split test --num-words $words --save datasets/${words}words_sequential_test.jsonl
+        python evaluate_sequential.py --dataset datasets/${words}words_sequential_test.jsonl --model checkpoint-3900 --samples 500 --export-all results/sequential_${words}words/
     done
 """
 
@@ -53,7 +60,7 @@ from datetime import datetime
 from dataclasses import dataclass, asdict
 from typing import Optional
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from dataset_generator import load_jsonl, samples_to_dataset
+from dataset_generator_unified import load_jsonl, samples_to_dataset
 from reward import compute_alignment_score, parse_output, evaluate_single
 
 # ============================================================================
@@ -84,7 +91,7 @@ class SampleResult:
     fragment_a: str
     fragment_b: str
     prompt_text: str        # full prompt sent to model
-    expected_str: str       # ground truth interleaved output
+    expected_str: str       # ground truth sequential output
     raw_completion: str     # raw model output before parsing
     output_str: str         # parsed model output used for scoring
     # Optional detailed alignment (for verbose mode)
@@ -126,11 +133,11 @@ class EvalSummary:
 def generate_completion(model, tokenizer, prompt, max_new_tokens=MAX_NEW_TOKENS):
     """Generate a single completion."""
     inputs = tokenizer.apply_chat_template(
-        prompt, 
+        prompt,
         return_tensors="pt",
         add_generation_prompt=True
     ).to(model.device)
-    
+
     with torch.no_grad():
         outputs = model.generate(
             inputs,
@@ -138,33 +145,33 @@ def generate_completion(model, tokenizer, prompt, max_new_tokens=MAX_NEW_TOKENS)
             do_sample=False,  # greedy for reproducibility
             pad_token_id=tokenizer.eos_token_id,
         )
-    
+
     # Decode only the new tokens
     completion = tokenizer.decode(outputs[0][inputs.shape[1]:], skip_special_tokens=True)
     return completion
 
 
 def evaluate_sample(
-    model, 
-    tokenizer, 
-    sample: dict, 
+    model,
+    tokenizer,
+    sample: dict,
     sample_id: int,
     verbose: bool = False
 ) -> SampleResult:
     """Evaluate a single sample and return detailed results."""
     completion = generate_completion(model, tokenizer, sample["prompt"])
     output_words = parse_output(completion)
-    
+
     # Get detailed alignment info
     result = evaluate_single(sample["expected"], completion, verbose=verbose)
-    
+
     # Extract prompt text
     prompt = sample["prompt"]
     if isinstance(prompt, list) and len(prompt) > 0:
         prompt_text = prompt[0].get("content", str(prompt))
     else:
         prompt_text = str(prompt)
-    
+
     return SampleResult(
         sample_id=sample_id,
         score=result["score"],
@@ -188,18 +195,18 @@ def evaluate_sample(
 
 
 def run_eval(
-    model, 
-    tokenizer, 
-    dataset, 
-    num_samples: int = NUM_EVAL_SAMPLES, 
-    verbose: bool = False, 
-    verbose_rate: int = 10, 
+    model,
+    tokenizer,
+    dataset,
+    num_samples: int = NUM_EVAL_SAMPLES,
+    verbose: bool = False,
+    verbose_rate: int = 10,
     truncate: Optional[int] = None,
     collect_alignments: bool = False,
 ) -> list[SampleResult]:
     """
     Run evaluation on dataset, return detailed per-sample results.
-    
+
     Args:
         model: loaded model
         tokenizer: loaded tokenizer
@@ -209,13 +216,13 @@ def run_eval(
         verbose_rate: how often to print verbose output
         truncate: truncate verbose output to N characters
         collect_alignments: include full alignments in results (memory intensive)
-    
+
     Returns:
         List of SampleResult objects
     """
     num_samples = min(num_samples, len(dataset))
     results = []
-    
+
     for i in range(num_samples):
         sample = dataset[i]
         result = evaluate_sample(
@@ -223,21 +230,21 @@ def run_eval(
             verbose=collect_alignments
         )
         results.append(result)
-        
+
         # Show verbose output for every Nth sample
         if verbose and (i % verbose_rate == 0):
             print()
             print(f"{'='*60}")
             print(f"Sample {i+1}/{num_samples} - Score: {result.score:.3f}")
             print(f"{'='*60}")
-            
+
             if truncate:
                 # Truncated mode - for quick sanity check
                 trunc_len = truncate
                 print(f"Fragment A: {result.fragment_a[:trunc_len]}{'...' if len(result.fragment_a) > trunc_len else ''}")
                 print(f"Fragment B: {result.fragment_b[:trunc_len]}{'...' if len(result.fragment_b) > trunc_len else ''}")
                 print()
-                print(f"Expected ({result.expected_len} words):")
+                print(f"Expected (sequential, {result.expected_len} words):")
                 print(f"  {result.expected_str[:trunc_len]}{'...' if len(result.expected_str) > trunc_len else ''}")
                 print()
                 print(f"Model Output ({result.output_len} words):")
@@ -250,19 +257,19 @@ def run_eval(
                 print(f"Fragment B:")
                 print(result.fragment_b)
                 print()
-                print(f"Expected ({result.expected_len} words):")
+                print(f"Expected (sequential, {result.expected_len} words):")
                 print(result.expected_str)
                 print()
                 print(f"Model Output ({result.output_len} words):")
                 print(result.output_str)
-            
+
             print(f"\nAlignment: matches={result.matches}, mismatches={result.mismatches}, gaps={result.gaps}")
             print()
-            
+
         if (i + 1) % 10 == 0:
             scores_so_far = [r.score for r in results]
             print(f"  {i+1}/{num_samples} - running avg: {sum(scores_so_far)/len(scores_so_far):.3f}")
-    
+
     return results
 
 
@@ -273,9 +280,9 @@ def compute_summary(
 ) -> EvalSummary:
     """Compute summary statistics from detailed results."""
     import statistics
-    
+
     scores = [r.score for r in results]
-    
+
     return EvalSummary(
         model_name=model_name,
         dataset_path=dataset_path or "generated",
@@ -310,22 +317,22 @@ def export_results_csv(results: list[SampleResult], path: str):
     """Export per-sample results to CSV."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Exclude alignment fields (too large for CSV)
     fieldnames = [
         'sample_id', 'score', 'raw_score', 'expected_len', 'output_len',
         'matches', 'mismatches', 'gaps', 'text_a_id', 'text_b_id',
-        'fragment_a', 'fragment_b', 'prompt_text', 'expected_str', 
+        'fragment_a', 'fragment_b', 'prompt_text', 'expected_str',
         'raw_completion', 'output_str'
     ]
-    
-    with open(path, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+    with open(path, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for r in results:
             row = {k: getattr(r, k) for k in fieldnames}
             writer.writerow(row)
-    
+
     print(f"Exported {len(results)} results to {path}")
 
 
@@ -333,7 +340,7 @@ def export_results_json(results: list[SampleResult], path: str, include_alignmen
     """Export per-sample results to JSON."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     data = []
     for r in results:
         d = asdict(r)
@@ -341,10 +348,10 @@ def export_results_json(results: list[SampleResult], path: str, include_alignmen
             d.pop('aligned_expected', None)
             d.pop('aligned_output', None)
         data.append(d)
-    
+
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2)
-    
+
     print(f"Exported {len(results)} results to {path}")
 
 
@@ -352,10 +359,10 @@ def export_summary_json(summary: EvalSummary, path: str):
     """Export summary statistics to JSON."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(asdict(summary), f, indent=2)
-    
+
     print(f"Exported summary to {path}")
 
 
@@ -363,13 +370,13 @@ def export_score_distribution(results: list[SampleResult], path: str, bins: int 
     """Export score distribution data for plotting."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     scores = [r.score for r in results]
-    
+
     # Create histogram data
     import numpy as np
     counts, bin_edges = np.histogram(scores, bins=bins, range=(0, 1))
-    
+
     data = {
         "scores": scores,
         "histogram": {
@@ -385,10 +392,10 @@ def export_score_distribution(results: list[SampleResult], path: str, bins: int 
             "p95": float(np.percentile(scores, 95)),
         }
     }
-    
+
     with open(path, 'w') as f:
         json.dump(data, f, indent=2)
-    
+
     print(f"Exported distribution data to {path}")
 
 
@@ -398,42 +405,42 @@ def export_score_distribution(results: list[SampleResult], path: str, bins: int 
 
 if __name__ == "__main__":
     import argparse
-    
-    parser = argparse.ArgumentParser(description="Evaluate interleaving performance")
+
+    parser = argparse.ArgumentParser(description="Evaluate sequential recitation performance")
     parser.add_argument("--model", default=MODEL_NAME, help="Model name or path")
     parser.add_argument("--dataset", default=None, help="Path to JSONL dataset file")
     parser.add_argument("--samples", type=int, default=NUM_EVAL_SAMPLES, help="Number of samples")
     parser.add_argument("--verbose", action="store_true", help="Show individual completions")
-    parser.add_argument("--verbose-rate", type=int, default=10, 
+    parser.add_argument("--verbose-rate", type=int, default=10,
                         help="Show verbose output every N samples (default: 10)")
     parser.add_argument("--truncate", nargs='?', const=100, type=int, default=None,
                         help="Truncate verbose output to N characters")
-    
+
     # Export options
     parser.add_argument("--export-csv", default=None, help="Export per-sample results to CSV")
     parser.add_argument("--export-json", default=None, help="Export per-sample results to JSON")
     parser.add_argument("--export-summary", default=None, help="Export summary statistics to JSON")
     parser.add_argument("--export-distribution", default=None, help="Export score distribution to JSON")
-    parser.add_argument("--export-all", default=None, 
+    parser.add_argument("--export-all", default=None,
                         help="Export all outputs to directory (creates results.csv, results.json, summary.json, distribution.json)")
-    
+
     args = parser.parse_args()
-    
+
     print(f"Loading model: {args.model}")
-    
+
     # For local checkpoints, load tokenizer from base model
     import os
     if os.path.isdir(args.model):
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     else:
         tokenizer = AutoTokenizer.from_pretrained(args.model)
-    
+
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
-    
+
     # Load dataset
     if args.dataset:
         print(f"Loading dataset: {args.dataset}")
@@ -443,22 +450,22 @@ if __name__ == "__main__":
     else:
         print("ERROR: No dataset specified. Use --dataset path/to/file.jsonl")
         exit(1)
-    
+
     print(f"Evaluating on {args.samples} samples...")
     results = run_eval(
         model, tokenizer, dataset, args.samples,
-        verbose=args.verbose, 
-        verbose_rate=args.verbose_rate, 
+        verbose=args.verbose,
+        verbose_rate=args.verbose_rate,
         truncate=args.truncate
     )
-    
+
     # Compute summary
     summary = compute_summary(results, args.model, args.dataset)
-    
+
     # Print summary
     print()
     print("=" * 60)
-    print(f"RESULTS ({summary.num_samples} samples)")
+    print(f"SEQUENTIAL RECITATION RESULTS ({summary.num_samples} samples)")
     print("=" * 60)
     print(f"Model: {summary.model_name}")
     print(f"Dataset: {summary.dataset_path}")
@@ -479,10 +486,10 @@ if __name__ == "__main__":
     print(f"  Avg expected length: {summary.mean_expected_len:.1f} words")
     print(f"  Avg output length:   {summary.mean_output_len:.1f} words")
     print(f"  Total matches:       {summary.total_matches}")
-    print(f"  Total mismatches:    {summary.total_mismatches}")
+    print(f"  Total mismatches:     {summary.total_mismatches}")
     print(f"  Total gaps:          {summary.total_gaps}")
     print("=" * 60)
-    
+
     # Handle exports
     if args.export_all:
         export_dir = Path(args.export_all)
