@@ -1,5 +1,7 @@
 
-# Table of Contents
+
+
+## Table of Contents
 
 
 [TOC]
@@ -8,17 +10,37 @@
 
 
 
-# Interleave_GRPO {#interleave_grpo}
+## Interleave_GRPO {#interleave_grpo}
 
 
-## Overview {#overview}
+### Overview {#overview}
+
+Hypothesis 1: The ability to interleave the execution and output of two, or more, different tasks is a measurement of a model’s ability to maintain latent states.
+
+Hypothesis 2: An architecture has a limit of both depth (length of text, steps in a calculation, etc) and breadth (number of simultaneous worlds/processes) that it can track.
+
+Hypothesis 2a: This ability can be trained.
+
+Hypothesis 2b: The architectures limit can be mapped
+
+Hypothesis 2b1: The length of texts (or sequence of calculations) that the model can recite successfully for a given training regimen is described by the logistic function
+
+Hypothesis 2b2: the rate of transition of success for a given depth is an indicator of approaching the boundary: shallower curves indicate training is still possible, steeper curves indicate approach of architectural capacity. 
+
+Hypothesis 3: Training on interleaving can lead to formation of independent thinking structures.
+
+Hypothesis 4: The wording of the prompts during training affects the nature of the structure: “processes” vs “pointers” vs “worlds”
+
+Concern 1: Has the model lost ability as a result of the training
+
+Concern 1a: Ability to recite texts sequentially
+
+Concern 1b: general purpose tasks. 
+
+Radical reduction in scope 
 
 
-
-1. We've demonstrated the ability to train, and train on this task. The next step is exploring boundaries. So at this point, we really should be starting to prepare for publication. This means rigorous data collection
-
-
-## Steps of an expt. {#steps-of-an-expt}
+### Steps of an expt. {#steps-of-an-expt}
 
 
 
@@ -27,7 +49,7 @@
 3. one option here is to create a curriculum that creates data sets of increasing size. "python dataset_generator.py --curriculum --output-dir datasetets/" creates the dataset director with 6 jsonl files. default is 5000 data pairs 80% for tarain, 10% for val and 10% for test.
 
 
-## Breakdown of files {#breakdown-of-files}
+### Breakdown of files {#breakdown-of-files}
 
 
 
@@ -45,7 +67,7 @@
 12. outputdir
 
 
-## Features {#features}
+### Features {#features}
 
 
 
@@ -53,10 +75,10 @@
 * NW alignment converts strings to numbers for performance gains on alignments (orders of magnitude faster than string comparison) (conversation w/ claude on Dec 22 2025)
 
 
-## Infrastructure {#infrastructure}
+### Infrastructure {#infrastructure}
 
 
-### Python scripts {#python-scripts}
+#### Python scripts {#python-scripts}
 
 
 
@@ -68,7 +90,7 @@
 6. Fi
 
 
-## Coding guidelines {#coding-guidelines}
+### Coding guidelines {#coding-guidelines}
 
 
 
@@ -77,19 +99,19 @@
 3. tests should be based on "cases" so that edge cases can be evaluated. Something like "defined input, expected output".
 
 
-### Testing {#testing}
+#### Testing {#testing}
 
 Layer 1: Unit tests - Do the individual functions produce correct output for known inputs? (reward.py --test) with Layer 2: Integration tests - Do the components work together? (dataset → reward function) Layer 3: Smoke test - Does the whole pipeline run without crashing? (load model, 1 training step) Layer 4: Baseline eval - Does it actually do the thing? (measure performance before/after)
 
 
-### Unit Tests {#unit-tests}
+#### Unit Tests {#unit-tests}
 
 python reward.py --test          # NW alignment, parsing
 
 python dataset_generator.py --preview 5  # Sample generation
 
 
-### Integration Test {#integration-test}
+#### Integration Test {#integration-test}
 
 python -c "
 
@@ -112,17 +134,17 @@ print('Integration test passed')
 "
 
 
-### Smoke Test (on RunPod) {#smoke-test-on-runpod}
+#### Smoke Test (on RunPod) {#smoke-test-on-runpod}
 
 python interleave_grpo.py --test  # Loads model, runs 1 step, exits
 
 
-### Baseline Eval {#baseline-eval}
+#### Baseline Eval {#baseline-eval}
 
 python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 
 
-## Known issues {#known-issues}
+### Known issues {#known-issues}
 
 
 
@@ -133,7 +155,7 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 5. number of instances of a single text needs to be high so there's engough  for comparison
 
 
-# Questions {#questions}
+## Questions {#questions}
 
 
 
@@ -181,7 +203,7 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
     * 1/15/26 max_prompt_length=512, max_completion_length=256. Working for 10-word fragments. Will need increase for 500-word curriculum.
 
 
-# Todo {#todo}
+## Todo {#todo}
 
 
 
@@ -315,13 +337,13 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
     * 1/15/26 Done. Both use NW alignment from reward.py.
 
 
-## Soures (Full or first 500 words, whichever comes first) {#soures-full-or-first-500-words-whichever-comes-first}
+### Soures (Full or first 500 words, whichever comes first) {#soures-full-or-first-500-words-whichever-comes-first}
 
 
-## Source Texts (91 Public Domain) {#source-texts-91-public-domain}
+### Source Texts (91 Public Domain) {#source-texts-91-public-domain}
 
 
-### Speeches {#speeches}
+#### Speeches {#speeches}
 
 
 
@@ -334,7 +356,7 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 7. Reagan Challenger Address
 
 
-### Shakespeare {#shakespeare}
+#### Shakespeare {#shakespeare}
 
 
 
@@ -350,7 +372,7 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 17. Midsummer Night's Dream Puck's closing
 
 
-### Religious/Classical {#religious-classical}
+#### Religious/Classical {#religious-classical}
 
 
 
@@ -365,7 +387,7 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 26. Revelation 21:1-4
 
 
-### American Founding Documents {#american-founding-documents}
+#### American Founding Documents {#american-founding-documents}
 
 
 
@@ -380,7 +402,7 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 35. America the Beautiful lyrics
 
 
-### Poetry {#poetry}
+#### Poetry {#poetry}
 
 
 
@@ -403,7 +425,7 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 52. Joyce Kilmer "Trees"
 
 
-### Nursery Rhymes {#nursery-rhymes}
+#### Nursery Rhymes {#nursery-rhymes}
 
 
 
@@ -429,7 +451,7 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 72. Rock-a-Bye Baby
 
 
-### Novel Openings {#novel-openings}
+#### Novel Openings {#novel-openings}
 
 
 
@@ -452,10 +474,10 @@ python evaluate.py --model meta-llama/Llama-3.2-3B-Instruct --samples 100
 89. Dracula
 
 
-## Prompt Templates {#prompt-templates}
+### Prompt Templates {#prompt-templates}
 
 
-### Worlds Template {#worlds-template}
+#### Worlds Template {#worlds-template}
 
 You are two independent worlds. They do not share memory, state, or context. They exist in complete isolation except for the fact that you will output one word from each in alternation.
 
@@ -470,4 +492,4 @@ Output one word from World A, then one word from World B. Continue alternating W
 Do not add commentary, explanation, labels, or metadata. Output one word per line, including any attached punctuation (e.g., "be," not "be"). Do not wait for additional input. Do this all in one turn. Begin now and continue until complete.
 
 
-# 
+## 
