@@ -25,14 +25,14 @@ Usage:
     # Generate curriculum for sequential
     python dataset_generator_unified.py --mode sequential --curriculum --output-dir datasets_sequential/
 
-    # Preview interleaving without saving
-    python dataset_generator_unified.py --mode interleave --num-words 25 --preview 3
+    # Preview samples during generation (still saves files)
+    python dataset_generator_unified.py --mode interleave --num-words 25 --preview 3 --save datasets/preview.jsonl
 
-    # Preview sequential without saving
-    python dataset_generator_unified.py --mode sequential --num-words 25 --preview 3
-
-    # Print sequential samples to stdout for testing (no Dataset creation)
+    # Print samples to stdout instead of saving files
     python dataset_generator_unified.py --mode sequential --num-words 10 --print-samples | head -5
+
+    # Print curriculum samples to stdout
+    python dataset_generator_unified.py --mode sequential --curriculum --print-samples | head -10
 """
 
 import json
@@ -58,6 +58,11 @@ SOURCE_TEXTS_PATH = "source_texts_split.json"
 NUM_TRAIN_SAMPLES = 4000
 NUM_VAL_SAMPLES = 500
 NUM_TEST_SAMPLES = 500
+
+# Special defaults for print mode
+PRINT_TRAIN_SAMPLES = 0
+PRINT_VAL_SAMPLES = 0
+PRINT_TEST_SAMPLES = 0
 
 # Fragment length (difficulty dial - start small, increase as model improves)
 NUM_WORDS = 10  # Default to easiest level
@@ -100,7 +105,7 @@ Do not wait for additional input.
 Do this all in one turn.
 Begin now and continue until complete."""
 
-PROMPT_TEMPLATE_SEQUENTIAL = """You will output words from two texts in sequence.
+PROMPT_TEMPLATE_SEQUENTIAL = """You will run two processes in sequence.
 
 First, output all words from:
 {fragment_a}
@@ -371,6 +376,9 @@ def generate_samples_for_split(
     num_words: int = NUM_WORDS,
     seed: int = SEED,
     mode: str = MODE,
+    interleave_ratio: int = 1,
+    sequential_ratio: int = 1,
+    pattern: str = "random",
 ) -> list[dict]:
     """
     Generate samples using only the provided texts (should be pre-filtered by split).
@@ -380,13 +388,45 @@ def generate_samples_for_split(
         num_samples: Number of samples to generate
         num_words: Words per fragment
         seed: Random seed
-        mode: "interleave" or "sequential"
+        mode: "interleave", "sequential", or "mixed"
+        interleave_ratio: For mixed mode, ratio of interleave samples
+        sequential_ratio: For mixed mode, ratio of sequential samples
+        pattern: For mixed mode, "alternating" or "random"
 
     Returns:
         List of sample dicts
     """
     random.seed(seed)
-    return [create_sample(texts, num_words, mode=mode) for _ in range(num_samples)]
+
+    if mode == "mixed":
+        # Generate sequence of modes
+        total_ratio = interleave_ratio + sequential_ratio
+        modes_sequence = []
+        if pattern == "alternating":
+            # Alternate blocks
+            block_size = interleave_ratio + sequential_ratio
+            full_blocks = num_samples // block_size
+            remainder = num_samples % block_size
+
+            for _ in range(full_blocks):
+                modes_sequence.extend(["interleave"] * interleave_ratio)
+                modes_sequence.extend(["sequential"] * sequential_ratio)
+
+            # Handle remainder
+            remaining_modes = (["interleave"] * interleave_ratio + ["sequential"] * sequential_ratio)[:remainder]
+            modes_sequence.extend(remaining_modes)
+        else:  # random
+            # Random assignment based on ratio
+            for _ in range(num_samples):
+                r = random.random() * total_ratio
+                if r < interleave_ratio:
+                    modes_sequence.append("interleave")
+                else:
+                    modes_sequence.append("sequential")
+
+        return [create_sample(texts, num_words, mode=m) for m in modes_sequence]
+    else:
+        return [create_sample(texts, num_words, mode=mode) for _ in range(num_samples)]
 
 
 def generate_all_splits(
@@ -398,6 +438,9 @@ def generate_all_splits(
     seed: int = SEED,
     mode: str = MODE,
     only_split: str = None,
+    interleave_ratio: int = 1,
+    sequential_ratio: int = 1,
+    pattern: str = "random",
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """
     Generate train/val/test samples with zero text leakage.
@@ -432,15 +475,18 @@ def generate_all_splits(
 
     if not only_split or only_split == "train":
         train_samples = generate_samples_for_split(
-            texts_by_split["train"], num_train, num_words, seed, mode
+            texts_by_split["train"], num_train, num_words, seed, mode,
+            interleave_ratio, sequential_ratio, pattern
         )
     if not only_split or only_split == "val":
         val_samples = generate_samples_for_split(
-            texts_by_split["val"], num_val, num_words, seed + 1000, mode
+            texts_by_split["val"], num_val, num_words, seed + 1000, mode,
+            interleave_ratio, sequential_ratio, pattern
         )
     if not only_split or only_split == "test":
         test_samples = generate_samples_for_split(
-            texts_by_split["test"], num_test, num_words, seed + 2000, mode
+            texts_by_split["test"], num_test, num_words, seed + 2000, mode,
+            interleave_ratio, sequential_ratio, pattern
         )
 
     generated_splits = []
@@ -601,8 +647,13 @@ def generate_curriculum(
     num_val: int = NUM_VAL_SAMPLES,
     num_test: int = NUM_TEST_SAMPLES,
     seed: int = SEED,
-    stages: list[int] = None,
+    stages: list[int] = CURRICULUM_STAGES,
     mode: str = MODE,
+    return_samples: bool = False,
+    only_split: str = None,
+    interleave_ratio: int = 1,
+    sequential_ratio: int = 1,
+    pattern: str = "random",
 ):
     """Generate datasets for all curriculum stages with zero text leakage."""
     if stages is None:
@@ -615,33 +666,69 @@ def generate_curriculum(
     texts_by_split = load_texts_by_split(texts_path)
 
     mode_suffix = "_sequential" if mode == "sequential" else ""
-    print(f"\nGenerating {mode} curriculum datasets in {output_dir}/")
+    if return_samples:
+        print(f"\nGenerating {mode} curriculum samples...")
+    else:
+        print(f"\nGenerating {mode} curriculum datasets in {output_dir}/")
     print(f"Stages: {stages}")
-    print(f"Samples per stage: train={num_train}, val={num_val}, test={num_test}")
+    if only_split:
+        split_count = {"train": num_train, "val": num_val, "test": num_test}[only_split]
+        print(f"Samples per stage: {only_split}={split_count}")
+    else:
+        print(f"Samples per stage: train={num_train}, val={num_val}, test={num_test}")
     print()
 
+    all_samples = []
     for num_words in stages:
         print(f"\n--- {num_words} words ---")
 
         # Generate samples for each split
-        train = generate_samples_for_split(texts_by_split["train"], num_train, num_words, seed, mode)
-        val = generate_samples_for_split(texts_by_split["val"], num_val, num_words, seed + 1000, mode)
-        test = generate_samples_for_split(texts_by_split["test"], num_test, num_words, seed + 2000, mode)
+        train, val, test = generate_all_splits(
+            texts_path=texts_path,
+            num_train=num_train,
+            num_val=num_val,
+            num_test=num_test,
+            num_words=num_words,
+            seed=seed,
+            mode=mode,
+            only_split=only_split,
+            interleave_ratio=interleave_ratio,
+            sequential_ratio=sequential_ratio,
+            pattern=pattern,
+        )
 
-        # Save
-        base_path = output_dir / f"{num_words}words{mode_suffix}.jsonl"
-        save_all_splits(train, val, test, base_path, seed, mode)
+        if return_samples:
+            # Only collect the requested split(s)
+            if only_split:
+                if only_split == "train":
+                    all_samples.extend(train)
+                elif only_split == "val":
+                    all_samples.extend(val)
+                elif only_split == "test":
+                    all_samples.extend(test)
+            else:
+                all_samples.extend(train + val + test)
+        else:
+            # Save
+            base_path = output_dir / f"{num_words}words{mode_suffix}.jsonl"
+            save_all_splits(train, val, test, base_path, seed, mode)
 
         # Show sample info
-        sample = train[0]
-        prompt_len = len(sample['prompt'][0]['content'])
-        expected_len = len(sample['expected'])
-        print(f"  prompt~{prompt_len} chars, expected~{expected_len} tokens")
+        sample_list = train or val or test
+        if sample_list:
+            sample = sample_list[0]
+            prompt_len = len(sample['prompt'][0]['content'])
+            expected_len = len(sample['expected'])
+            print(f"  prompt~{prompt_len} chars, expected~{expected_len} tokens")
+
+    if return_samples:
+        return all_samples
 
     print()
     print("="*60)
     print("Done! Use with:")
-    print(f"  python interleave_grpo.py --dataset {output_dir}/10words{mode_suffix}.jsonl")
+    first_stage = stages[0] if stages else 10
+    print(f"  python interleave_grpo.py --dataset {output_dir}/{first_stage}words{mode_suffix}.jsonl")
     print()
     print("Zero text leakage verified: train/val/test use separate source texts")
     print("="*60)
@@ -656,14 +743,17 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate dataset (interleave or sequential)")
     parser.add_argument("--texts", default=SOURCE_TEXTS_PATH, help="Path to corpus JSON with split tags")
-    parser.add_argument("--num-train", type=int, default=NUM_TRAIN_SAMPLES, help="Training samples")
-    parser.add_argument("--num-val", type=int, default=NUM_VAL_SAMPLES, help="Validation samples")
-    parser.add_argument("--num-test", type=int, default=NUM_TEST_SAMPLES, help="Test samples")
+    parser.add_argument("--num-train", type=int, default=None, help="Training samples")
+    parser.add_argument("--num-val", type=int, default=None, help="Validation samples")
+    parser.add_argument("--num-test", type=int, default=None, help="Test samples")
     parser.add_argument("--num-words", type=int, default=NUM_WORDS, help="Words per fragment")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed")
     parser.add_argument("--preview", type=int, default=2, help="Number of samples to preview")
-    parser.add_argument("--mode", default=MODE, choices=["interleave", "sequential"],
-                        help="Task type: interleave words or output sequentially")
+    parser.add_argument("--mode", default=MODE, choices=["interleave", "sequential", "mixed"],
+                        help="Task type: interleave, sequential, or mixed (interleave+sequential)")
+    parser.add_argument("--interleave-ratio", type=int, default=1, help="For mixed mode: ratio of interleave samples (e.g., 3 for 3:1 interleave:sequential)")
+    parser.add_argument("--sequential-ratio", type=int, default=1, help="For mixed mode: ratio of sequential samples (e.g., 1 for 3:1 interleave:sequential)")
+    parser.add_argument("--pattern", choices=["alternating", "random"], default="random", help="For mixed mode: alternating blocks or random shuffle")
     parser.add_argument("--only-split", choices=["train", "val", "test"], default=None,
                         help="Generate only this split (default: generate all splits)")
     parser.add_argument("--print-samples", action="store_true",
@@ -674,22 +764,93 @@ if __name__ == "__main__":
     parser.add_argument("--load", default=None, help="Load from pre-saved split files")
 
     # Curriculum generation
-    parser.add_argument("--curriculum", action="store_true", help="Generate all curriculum stages")
+    parser.add_argument("--curriculum", nargs='*', type=int, help="Generate curriculum stages (default: 10,25,50,100,200,500). With --print-samples, defaults to test split only")
     parser.add_argument("--output-dir", default="datasets", help="Output directory for curriculum")
 
     args = parser.parse_args()
 
+    # Set defaults based on context
+    if args.print_samples and args.curriculum is not None:
+        # For print curriculum mode, default to 0 for val/test, 1 for test if not specified
+        if args.num_train is None:
+            args.num_train = 0
+        if args.num_val is None:
+            args.num_val = 0
+        if args.num_test is None:
+            args.num_test = PRINT_TEST_SAMPLES
+    else:
+        # Normal defaults
+        if args.num_train is None:
+            args.num_train = NUM_TRAIN_SAMPLES
+        if args.num_val is None:
+            args.num_val = NUM_VAL_SAMPLES
+        if args.num_test is None:
+            args.num_test = NUM_TEST_SAMPLES
+
     # Curriculum mode
-    if args.curriculum:
-        generate_curriculum(
-            output_dir=args.output_dir,
-            texts_path=args.texts,
-            num_train=args.num_train,
-            num_val=args.num_val,
-            num_test=args.num_test,
-            seed=args.seed,
-            mode=args.mode,
-        )
+    if args.curriculum is not None:
+        # Use provided stages or default
+        if args.curriculum:
+            stages = args.curriculum
+        else:
+            stages = CURRICULUM_STAGES
+
+        # No default split override for print-samples in curriculum mode
+
+        # When printing samples in curriculum mode, default to the split(s) with non-zero counts
+        if args.print_samples and args.curriculum is not None and not args.only_split:
+            non_zero_splits = []
+            if args.num_train > 0:
+                non_zero_splits.append("train")
+            if args.num_val > 0:
+                non_zero_splits.append("val")
+            if args.num_test > 0:
+                non_zero_splits.append("test")
+            if len(non_zero_splits) == 1:
+                args.only_split = non_zero_splits[0]
+
+        # When printing samples, limit to the specified num_words stage only if no stages provided
+        if args.print_samples and not args.curriculum:
+            stages = [args.num_words]
+
+        if args.print_samples:
+            # Generate and return all samples for printing
+            all_samples = generate_curriculum(
+                output_dir=args.output_dir,
+                texts_path=args.texts,
+                num_train=args.num_train,
+                num_val=args.num_val,
+                num_test=args.num_test,
+                seed=args.seed,
+                mode=args.mode,
+                stages=stages,
+                return_samples=True,
+                only_split=args.only_split,
+                interleave_ratio=args.interleave_ratio,
+                sequential_ratio=args.sequential_ratio,
+                pattern=args.pattern,
+            )
+            # Print samples to stdout
+            import sys
+            import json
+            print("=== PRINTING CURRICULUM SAMPLES TO STDOUT (JSONL format) ===", file=sys.stderr)
+            for sample in all_samples:
+                print(json.dumps(sample))
+        else:
+            generate_curriculum(
+                output_dir=args.output_dir,
+                texts_path=args.texts,
+                num_train=args.num_train,
+                num_val=args.num_val,
+                num_test=args.num_test,
+                seed=args.seed,
+                mode=args.mode,
+                stages=stages,
+                only_split=args.only_split,
+                interleave_ratio=args.interleave_ratio,
+                sequential_ratio=args.sequential_ratio,
+                pattern=args.pattern,
+            )
         exit(0)
 
     # Load mode
@@ -735,6 +896,9 @@ if __name__ == "__main__":
             seed=args.seed,
             mode=args.mode,
             only_split=args.only_split,
+            interleave_ratio=args.interleave_ratio,
+            sequential_ratio=args.sequential_ratio,
+            pattern=args.pattern,
         )
         # Preview the generated samples (prefer train, then val, then test)
         samples = train_samples or val_samples or test_samples

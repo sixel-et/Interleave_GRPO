@@ -61,7 +61,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from dataset_generator_unified import load_jsonl, samples_to_dataset
-from reward import compute_alignment_score, parse_output, evaluate_single
+from reward_for_new_evaluate import compute_alignment_score, parse_output, evaluate_single
 
 # ============================================================================
 # CONFIG
