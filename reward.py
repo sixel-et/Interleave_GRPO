@@ -478,6 +478,108 @@ def evaluate_single(expected: List[str], output_text: str, verbose: bool = False
     return result
 
 
+def tokenize_with_newlines(text: str) -> List[str]:
+    """
+    Tokenize text, keeping newlines as explicit tokens.
+
+    This allows NW alignment to properly penalize formatting errors:
+    - Extra newlines become extra '\\n' tokens
+    - Missing newlines mean missing '\\n' tokens
+    - Multiword lines have words without '\\n' between them
+
+    Examples:
+        "word1\\nword2" → ['word1', '\\n', 'word2']
+        "word1\\n\\nword2" → ['word1', '\\n', '\\n', 'word2']
+        "word1 word2\\nword3" → ['word1', 'word2', '\\n', 'word3']
+    """
+    tokens = []
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        # Add words from this line
+        words = line.split()
+        tokens.extend(words)
+        # Add newline token between lines (not after last)
+        if i < len(lines) - 1:
+            tokens.append('\n')
+    return tokens
+
+
+def evaluate_single_lines(expected_str: str, output_text: str, verbose: bool = False) -> dict:
+    """
+    Evaluate model output against expected with separate word and format scores.
+
+    Returns three scores:
+    - word_score: NW alignment of just the words (ignoring formatting)
+    - format_score: How well the output matches one-word-per-line format
+    - score (composite): word_score * format_score
+
+    The composite score ensures formatting can only penalize, never boost.
+    A perfect word match with bad formatting gets penalized.
+    Bad words with good formatting still scores low.
+
+    Args:
+        expected_str: Expected output with newlines (one word per line)
+        output_text: Raw model output
+        verbose: Include alignment details
+
+    Returns dict with scores and alignment details.
+    """
+    # === WORD-LEVEL SCORING ===
+    # Extract just the words (no formatting)
+    expected_words = expected_str.split()
+    output_words = [w for line in output_text.split('\n') for w in line.split()]
+
+    word_score = compute_alignment_score(expected_words, output_words)
+    word_raw_score, aligned_exp_words, aligned_out_words = nw_align(expected_words, output_words)
+
+    # Word-level stats
+    word_matches = sum(1 for a, b in zip(aligned_exp_words, aligned_out_words) if a == b and a != '-')
+    word_mismatches = sum(1 for a, b in zip(aligned_exp_words, aligned_out_words) if a != b and a != '-' and b != '-')
+    word_gaps = sum(1 for a, b in zip(aligned_exp_words, aligned_out_words) if a == '-' or b == '-')
+
+    # === FORMAT SCORING ===
+    # Expected format: one word per line
+    # Count actual format metrics
+    output_lines = output_text.split('\n')
+    empty_lines = sum(1 for line in output_lines if line.strip() == '')
+    multiword_lines = sum(1 for line in output_lines if len(line.split()) > 1)
+
+    # Format score: penalize for deviations from one-word-per-line
+    # Violations: empty lines + extra words on multiword lines
+    if len(output_words) == 0:
+        format_score = 0.0
+    else:
+        # Count extra words from multiword lines (each should have 1, so extras are violations)
+        extra_words = sum(max(0, len(line.split()) - 1) for line in output_lines)
+        # Total violations = empty lines + extra words on same line
+        violations = empty_lines + extra_words
+        # Format score = 1 - (violations / output_words), clamped to [0, 1]
+        format_score = max(0.0, 1.0 - violations / len(output_words))
+
+    # === COMPOSITE SCORE ===
+    composite_score = word_score * format_score
+
+    result = {
+        "score": composite_score,
+        "word_score": word_score,
+        "format_score": format_score,
+        "raw_score": word_raw_score,
+        "expected_len": len(expected_words),
+        "output_len": len(output_words),
+        "matches": word_matches,
+        "mismatches": word_mismatches,
+        "gaps": word_gaps,
+        "empty_lines": empty_lines,
+        "multiword_lines": multiword_lines,
+    }
+
+    if verbose:
+        result["aligned_expected"] = aligned_exp_words
+        result["aligned_output"] = aligned_out_words
+
+    return result
+
+
 def print_alignment(expected: List[str], output_text: str):
     """Pretty print alignment for debugging."""
     result = evaluate_single(expected, output_text, verbose=True)
